@@ -155,6 +155,26 @@ public class TpcLoader : MonoBehaviour
             chunk.chunkObject = null;
         }
     }
+
+    void OnDisable()
+    {
+        CloseReader();
+    }
+
+    void OnDestroy()
+    {
+        CloseReader();
+    }
+
+    void CloseReader()
+    {
+        if (_reader != null)
+        {
+            _reader.Close();
+            _reader.Dispose();
+            _reader = null;
+        }
+    }
 }
 
 [Serializable]
