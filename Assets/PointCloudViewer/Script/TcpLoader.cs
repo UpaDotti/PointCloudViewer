@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using Unity.VisualScripting;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 public class TpcLoader : MonoBehaviour
 {
@@ -15,9 +17,6 @@ public class TpcLoader : MonoBehaviour
     [SerializeField]
     private float _maxPointsPerPixel = 1.0f; // 1ピクセルあたりの許容点密度
 
-    [SerializeField]
-    private float _pointSize = 0.05f;
-
     // 状態
     [SerializeField]
     private TcpHeader _header;
@@ -26,6 +25,7 @@ public class TpcLoader : MonoBehaviour
     private List<TcpChunk> _chunks;
 
     private BinaryReader _reader;
+    private RenderParams _renderParams;
     private ulong _headerSize;
     private ulong _chunkSize;
 
@@ -35,6 +35,7 @@ public class TpcLoader : MonoBehaviour
     {
         string fullPath = Path.Combine(Application.dataPath, _filePath.Replace("Assets/", ""));
         LoadHeader(fullPath);
+        GenerateRenderParams();
     }
 
     /// <summary>
@@ -84,6 +85,18 @@ public class TpcLoader : MonoBehaviour
         _chunkSize = (ulong)(chunkEnd - headerEnd);
     }
 
+    private void GenerateRenderParams()
+    {
+        _renderParams = new RenderParams(_pointMaterial)
+        {
+            shadowCastingMode = ShadowCastingMode.Off,
+            receiveShadows = false,
+            lightProbeUsage = LightProbeUsage.Off,
+            reflectionProbeUsage = ReflectionProbeUsage.Off,
+            motionVectorMode = MotionVectorGenerationMode.ForceNoMotion,
+        };
+    }
+
     private void Update()
     {
         var planes = GeometryUtility.CalculateFrustumPlanes(Camera.main);
@@ -91,7 +104,7 @@ public class TpcLoader : MonoBehaviour
         foreach (var chunk in _chunks)
         {
             Bounds bounds = new Bounds();
-            bounds.SetMinMax(chunk.min + transform.position, chunk.max + transform.position);
+            bounds.SetMinMax(chunk.min, chunk.max);
 
             // 視界に入っているか
             bool isVisible = GeometryUtility.TestPlanesAABB(planes, bounds);
@@ -108,7 +121,13 @@ public class TpcLoader : MonoBehaviour
             }
             else
             {
-                if (chunk.isLoaded) UnloadChunk(chunk);
+                if (chunk.isLoaded) UnloadChunkPoints(chunk);
+            }
+
+            // 描画
+            if (chunk.mesh != null)
+            {
+                Graphics.RenderMesh(_renderParams, chunk.mesh, 0, Matrix4x4.identity);
             }
         }
     }
@@ -118,10 +137,10 @@ public class TpcLoader : MonoBehaviour
     /// </summary>
     private void LoadChunkPoints(TcpChunk chunk, int lod)
     {
-        // すでにオブジェクトがある場合はアンロード
-        if (chunk.chunkObject != null)
+        // すでにMeshがある場合はアンロード
+        if (chunk.mesh != null)
         {
-            UnloadChunk(chunk);
+            UnloadChunkPoints(chunk);
         }
 
         // LOD別の情報を取得
@@ -152,21 +171,11 @@ public class TpcLoader : MonoBehaviour
             indices.Add(i);
         }
 
-        // GameObjectを作成
-        var go = new GameObject($"Chunk_{chunk.index}");
-        go.transform.SetParent(this.transform);
-        chunk.meshFilter = go.AddComponent<MeshFilter>();
-        chunk.meshRenderer = go.AddComponent<MeshRenderer>();
-        chunk.meshRenderer.sharedMaterial = _pointMaterial;
-        chunk.chunkObject = go;
-
         // Meshを設定
-        chunk.mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-        chunk.mesh.MarkDynamic();
+        chunk.mesh = new Mesh { indexFormat = IndexFormat.UInt32 };
         chunk.mesh.SetVertices(vertices);
         chunk.mesh.SetColors(colors);
         chunk.mesh.SetIndices(indices, MeshTopology.Points, 0);
-        chunk.meshFilter.sharedMesh = chunk.mesh;
 
         // ロードしているLODを記録
         chunk.loadedLod = lod;
@@ -177,29 +186,29 @@ public class TpcLoader : MonoBehaviour
     /// </summary>
     private int ChooseLod(TcpChunk chunk)
     {
-        var cam = Camera.main;
+        var camera = Camera.main;
 
-        Bounds b = new Bounds();
-        b.SetMinMax(chunk.min + transform.position, chunk.max + transform.position);
+        Bounds bounds = new Bounds();
+        bounds.SetMinMax(chunk.min, chunk.max);
 
         // Bounds円の半径を取得
-        float r = b.extents.magnitude;
+        float r = bounds.extents.magnitude;
 
         // Bounds円の半径をピクセル数で取得
-        Vector3 center = b.center;
-        Vector3 sc = cam.WorldToScreenPoint(center);
-        Vector3 sx = cam.WorldToScreenPoint(center + cam.transform.right * r);
+        Vector3 center = bounds.center;
+        Vector3 sc = camera.WorldToScreenPoint(center);
+        Vector3 sx = camera.WorldToScreenPoint(center + camera.transform.right * r);
         float rPx = (sx - sc).magnitude;
 
         // Bounds円の面積をピクセル数で取得
         float areaPx = Mathf.Max(1f, Mathf.PI * rPx * rPx);
 
         // 閾値より低い場合にLODを返す
-        for (int l = 0; l < chunk.lods.Length; l++)
+        for (int i = 0; i < chunk.lods.Length; i++)
         {
-            int count = chunk.lods[l].count;
+            int count = chunk.lods[i].count;
             float density = count / areaPx;
-            if (density <= _maxPointsPerPixel) return l;
+            if (density <= _maxPointsPerPixel) return i;
         }
 
         // 最も粗いLODを返す
@@ -209,30 +218,24 @@ public class TpcLoader : MonoBehaviour
     /// <summary>
     /// 分割点群をアンロード
     /// </summary>
-    private void UnloadChunk(TcpChunk chunk)
+    private void UnloadChunkPoints(TcpChunk chunk)
     {
-        if (chunk.chunkObject != null)
-        {
-            Destroy(chunk.chunkObject);
-            chunk.chunkObject = null;
-            chunk.mesh = null;
-            chunk.meshFilter = null;
-            chunk.meshRenderer = null;
-            chunk.loadedLod = -1;
-        }
+        Destroy(chunk.mesh);
+        chunk.mesh = null;
+        chunk.loadedLod = -1;
     }
 
-    void OnDisable()
+    private void OnDisable()
     {
         CloseReader();
     }
 
-    void OnDestroy()
+    private void OnDestroy()
     {
         CloseReader();
     }
 
-    void CloseReader()
+    private void CloseReader()
     {
         if (_reader != null)
         {
@@ -264,13 +267,10 @@ public class TcpChunk
     public Vector3 max;
     public TcpLod[] lods;
 
-    public GameObject chunkObject = null;
     public Mesh mesh;
-    public MeshFilter meshFilter;
-    public MeshRenderer meshRenderer;
 
     public int loadedLod = -1;
-    public bool isLoaded => chunkObject != null;
+    public bool isLoaded => mesh != null;
 }
 
 [Serializable]
