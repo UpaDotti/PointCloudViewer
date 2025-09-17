@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using Unity.VisualScripting;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -17,6 +16,9 @@ public class TpcLoader : MonoBehaviour
     [SerializeField]
     private float _maxPointsPerPixel = 1.0f; // 1ピクセルあたりの許容点密度
 
+    [SerializeField]
+    private float _pointSize = 1.0f;
+
     // 状態
     [SerializeField]
     private TcpHeader _header;
@@ -25,7 +27,9 @@ public class TpcLoader : MonoBehaviour
     private List<TcpChunk> _chunks;
 
     private BinaryReader _reader;
-    private RenderParams _renderParams;
+    private RenderParams _rp;
+    private MaterialPropertyBlock _mpb;
+    private GraphicsBuffer _quadIndex;
     private ulong _headerSize;
     private ulong _chunkSize;
 
@@ -35,7 +39,7 @@ public class TpcLoader : MonoBehaviour
     {
         string fullPath = Path.Combine(Application.dataPath, _filePath.Replace("Assets/", ""));
         LoadHeader(fullPath);
-        GenerateRenderParams();
+        SetupRendering();
     }
 
     /// <summary>
@@ -85,9 +89,9 @@ public class TpcLoader : MonoBehaviour
         _chunkSize = (ulong)(chunkEnd - headerEnd);
     }
 
-    private void GenerateRenderParams()
+    private void SetupRendering()
     {
-        _renderParams = new RenderParams(_pointMaterial)
+        _rp = new RenderParams(_pointMaterial)
         {
             shadowCastingMode = ShadowCastingMode.Off,
             receiveShadows = false,
@@ -95,6 +99,12 @@ public class TpcLoader : MonoBehaviour
             reflectionProbeUsage = ReflectionProbeUsage.Off,
             motionVectorMode = MotionVectorGenerationMode.ForceNoMotion,
         };
+
+        _mpb = new MaterialPropertyBlock();
+
+        uint[] index = { 0u, 1u, 2u, 2u, 1u, 3u };
+        _quadIndex = new GraphicsBuffer(GraphicsBuffer.Target.Index, index.Length, sizeof(uint));
+        _quadIndex.SetData(index);
     }
 
     private void Update()
@@ -125,9 +135,17 @@ public class TpcLoader : MonoBehaviour
             }
 
             // 描画
-            if (chunk.mesh != null)
+            if (chunk.positions != null && chunk.colors != null)
             {
-                Graphics.RenderMesh(_renderParams, chunk.mesh, 0, Matrix4x4.identity);
+                _mpb.Clear();
+                _mpb.SetBuffer("_Positions", chunk.positions);
+                _mpb.SetBuffer("_Colors", chunk.colors);
+                _mpb.SetFloat("_PointSize", _pointSize);
+
+                _rp.matProps = _mpb;
+                _rp.worldBounds = bounds;
+
+                Graphics.RenderPrimitivesIndexedIndirect(_rp, MeshTopology.Triangles, _quadIndex, chunk.indirectArgs, 1, 0);
             }
         }
     }
@@ -138,10 +156,7 @@ public class TpcLoader : MonoBehaviour
     private void LoadChunkPoints(TcpChunk chunk, int lod)
     {
         // すでにMeshがある場合はアンロード
-        if (chunk.mesh != null)
-        {
-            UnloadChunkPoints(chunk);
-        }
+        UnloadChunkPoints(chunk);
 
         // LOD別の情報を取得
         var info = chunk.lods[lod];
@@ -152,9 +167,8 @@ public class TpcLoader : MonoBehaviour
 
         // 点群読込準備
         int count = info.count;
-        var vertices = new List<Vector3>(count);
-        var colors = new List<Color>(count);
-        var indices = new List<int>(count);
+        var positions = new List<Vector3>(count);
+        var colors = new List<Color32>(count);
 
         // 点群読込
         for (int i = 0; i < count; i++)
@@ -166,16 +180,24 @@ public class TpcLoader : MonoBehaviour
             byte g = _reader.ReadByte();
             byte b = _reader.ReadByte();
 
-            vertices.Add(new Vector3(x, y, z));
+            positions.Add(new Vector3(x, y, z));
             colors.Add(new Color32(r, g, b, 255));
-            indices.Add(i);
         }
 
-        // Meshを設定
-        chunk.mesh = new Mesh { indexFormat = IndexFormat.UInt32 };
-        chunk.mesh.SetVertices(vertices);
-        chunk.mesh.SetColors(colors);
-        chunk.mesh.SetIndices(indices, MeshTopology.Points, 0);
+        // 点群バッファを作成
+        chunk.positions = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, sizeof(float) * 3);
+        chunk.colors = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, sizeof(uint));
+        chunk.positions.SetData(positions);
+        chunk.colors.SetData(colors);
+
+        // 間接描画バッファを作成
+        chunk.indirectArgs = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, 1, GraphicsBuffer.IndirectDrawIndexedArgs.size);
+        var args = new GraphicsBuffer.IndirectDrawIndexedArgs[1];
+        args[0].indexCountPerInstance = 6u;
+        args[0].instanceCount = (uint)count;
+        args[0].startIndex = 0u;
+        args[0].baseVertexIndex = 0u;
+        chunk.indirectArgs.SetData(args);
 
         // ロードしているLODを記録
         chunk.loadedLod = lod;
@@ -220,19 +242,44 @@ public class TpcLoader : MonoBehaviour
     /// </summary>
     private void UnloadChunkPoints(TcpChunk chunk)
     {
-        Destroy(chunk.mesh);
-        chunk.mesh = null;
+        chunk.positions?.Dispose();
+        chunk.positions = null;
+
+        chunk.colors?.Dispose();
+        chunk.colors = null;
+
+        chunk.indirectArgs?.Dispose();
+        chunk.indirectArgs = null;
+
         chunk.loadedLod = -1;
     }
 
     private void OnDisable()
     {
+        UnloadAllChunks();
+        UnloadIndexBuffer();
         CloseReader();
     }
 
     private void OnDestroy()
     {
+        UnloadAllChunks();
+        UnloadIndexBuffer();
         CloseReader();
+    }
+
+    private void UnloadAllChunks()
+    {
+        foreach (var chunk in _chunks)
+        {
+            UnloadChunkPoints(chunk);
+        }
+    }
+
+    private void UnloadIndexBuffer()
+    {
+        _quadIndex?.Dispose();
+        _quadIndex = null;
     }
 
     private void CloseReader()
@@ -267,10 +314,12 @@ public class TcpChunk
     public Vector3 max;
     public TcpLod[] lods;
 
-    public Mesh mesh;
+    public GraphicsBuffer positions;
+    public GraphicsBuffer colors;
+    public GraphicsBuffer indirectArgs;
 
     public int loadedLod = -1;
-    public bool isLoaded => mesh != null;
+    public bool isLoaded => positions != null;
 }
 
 [Serializable]

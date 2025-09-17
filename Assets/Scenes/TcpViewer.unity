@@ -285,9 +285,19 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _filePath: Assets/sample.tpc
-  _pointMaterial: {fileID: 2100000, guid: 25959a4a95d3d954798756c1e8ec5f3a, type: 2}
-  _pointSize: 0.05
-  _chunkInfos: []
+  _pointMaterial: {fileID: 2100000, guid: cc48aa6224a1c644eb326c63e86e1756, type: 2}
+  _maxPointsPerPixel: 1
+  _pointSize: 1
+  _header:
+    magic: 
+    versionMajor: 0
+    versionMinor: 0
+    versionPatch: 0
+    lodLevels: 0
+    gridSize: 0
+    chunkCount: 0
+    center: {x: 0, y: 0, z: 0}
+  _chunks: []
 --- !u!1 &1887553523
 GameObject:
   m_ObjectHideFlags: 0
@@ -394,7 +404,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 22488eb3899dff34f98b4b2eb96fe1cd, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _moveSpeed: 10
+  _moveSpeed: 50
   _mouseSensitivity: 2
   _pitchMin: -89
   _pitchMax: 89
