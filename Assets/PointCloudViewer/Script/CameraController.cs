@@ -15,10 +15,6 @@ public class CameraController : MonoBehaviour
 
     void Start()
     {
-        // マウスカーソルをロック&非表示
-        Cursor.lockState = CursorLockMode.Locked;
-        Cursor.visible = false;
-
         // いまの角度を初期値に
         var e = transform.eulerAngles;
         _yaw = e.y;
@@ -27,15 +23,18 @@ public class CameraController : MonoBehaviour
 
     void Update()
     {
-        // ====== マウス回転 ======
-        float mouseX = Input.GetAxis("Mouse X");
-        float mouseY = Input.GetAxis("Mouse Y");
+        // ====== 右クリックで回転 ======
+        if (Input.GetMouseButton(1)) // 右クリックを押している間だけ
+        {
+            float mouseX = Input.GetAxis("Mouse X");
+            float mouseY = Input.GetAxis("Mouse Y");
 
-        _yaw += mouseX * _mouseSensitivity;
-        _pitch -= mouseY * _mouseSensitivity; // マウス上移動で上を向くように符号を反転
-        _pitch = Mathf.Clamp(_pitch, _pitchMin, _pitchMax);
+            _yaw += mouseX * _mouseSensitivity;
+            _pitch -= mouseY * _mouseSensitivity; // マウス上移動で上を向くように符号を反転
+            _pitch = Mathf.Clamp(_pitch, _pitchMin, _pitchMax);
 
-        transform.rotation = Quaternion.Euler(_pitch, _yaw, 0f);
+            transform.rotation = Quaternion.Euler(_pitch, _yaw, 0f);
+        }
 
         // ====== キーボード移動（任意） ======
         float moveX = Input.GetAxis("Horizontal"); // A/D
@@ -46,12 +45,5 @@ public class CameraController : MonoBehaviour
         if (Input.GetKey(KeyCode.E)) move += Vector3.up;
 
         transform.position += move * _moveSpeed * Time.deltaTime;
-
-        // ====== Escでカーソル解放（任意） ======
-        if (Input.GetKeyDown(KeyCode.Escape))
-        {
-            Cursor.lockState = CursorLockMode.None;
-            Cursor.visible = true;
-        }
     }
 }
