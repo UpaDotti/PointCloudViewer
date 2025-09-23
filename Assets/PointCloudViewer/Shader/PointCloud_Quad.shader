@@ -15,8 +15,9 @@ Shader "Custom/PointCloud_Quad"
             #pragma fragment frag
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
-            StructuredBuffer<float3> _Positions;
-            StructuredBuffer<uint>   _Colors;
+            StructuredBuffer<uint3> _Points;
+            float3 _ChunkMin;
+            float3 _ChunkMax;
             float _PointSize;
 
             // Quad Triangleの頂点 組み合わせ
@@ -27,15 +28,29 @@ Shader "Custom/PointCloud_Quad"
                 half2(-1,-1), half2(+1,-1),
                 half2(-1,+1), half2(+1,+1)
             };
+            
+            static const uint MASK8  = 0xFFu;    // 下位8ビット用
+            static const uint MASK16 = 0xFFFFu;  // 下位16ビット用
+
+            // u16量子化座標をmin/maxでワールド座標(float)へ復元
+            inline float3 DecodePos(uint uxy, uint uz16, float3 minV, float3 maxV)
+            {
+                uint ux = (uxy     & MASK16);
+                uint uy = (uxy >> 16);
+                uint uz = (uz16    & MASK16);
+
+                float3 t = float3((float)ux, (float)uy, (float)uz) / 65535.0;
+                return lerp(minV, maxV, t);
+            }
 
             // Color32をRGBAに変換
             inline half4 DecodeColor(uint c)
             {
-                uint r = ( c        & 0xFFu);
-                uint g = ((c >> 8 ) & 0xFFu);
-                uint b = ((c >> 16) & 0xFFu);
-                uint a = ((c >> 24) & 0xFFu);
-                return half4(r, g, b, a) / 255;
+                uint r = ( c        & MASK8);
+                uint g = ((c >> 8 ) & MASK8);
+                uint b = ((c >> 16) & MASK8);
+                uint a = ((c >> 24) & MASK8);
+                return half4(r, g, b, a) / 255.0h;
             }
 
             struct Varyings {
@@ -52,11 +67,14 @@ Shader "Custom/PointCloud_Quad"
                 // Quadのどの位置かを「0～3」で取得
                 const uint cornerID = QUAD_INDEX[svVertexID];
 
-                // 点群バッファから指定の点のPositionを取得
-                float3 posWS = _Positions[svInstanceID];
+                // 点群バッファから指定の点データを取得
+                uint3 pointData = _Points[svInstanceID];
+
+                // 点データからワールド座標を復元
+                float3 posWS = DecodePos(pointData.x, pointData.y, _ChunkMin, _ChunkMax);
 
                 // ワールド座標をクリップ空間に変換
-                float4 pc    = TransformWorldToHClip(posWS);
+                float4 posCSC    = TransformWorldToHClip(posWS);
 
                 // NDC座標における1ピクセルのサイズを取得
                 float2 ndcPerPx = 2.0 / _ScreenParams.xy;
@@ -65,10 +83,10 @@ Shader "Custom/PointCloud_Quad"
                 half2  ndcOff   = OFFS4[cornerID] * (half)_PointSize * (half2)ndcPerPx;
 
                 // 中心座標にオフセットを加えクリップ空間の最終位置を計算
-                o.posCS = float4(pc.xy + (float2)ndcOff * pc.w, pc.zw);
+                o.posCS = float4(posCSC.xy + (float2)ndcOff * posCSC.w, posCSC.zw);
 
-                // カラーを「0～1の小数値」で取得
-                o.col   = DecodeColor(_Colors[svInstanceID]);
+                // 点データからカラーを復元
+                o.col   = DecodeColor(pointData.z);
 
                 return o;
             }

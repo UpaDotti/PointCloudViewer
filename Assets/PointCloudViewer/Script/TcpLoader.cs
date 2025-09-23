@@ -135,11 +135,12 @@ public class TpcLoader : MonoBehaviour
             }
 
             // 描画
-            if (chunk.positions != null && chunk.colors != null)
+            if (chunk.pointBuffer != null)
             {
                 _mpb.Clear();
-                _mpb.SetBuffer("_Positions", chunk.positions);
-                _mpb.SetBuffer("_Colors", chunk.colors);
+                _mpb.SetBuffer("_Points", chunk.pointBuffer);
+                _mpb.SetVector("_ChunkMin", chunk.min);
+                _mpb.SetVector("_ChunkMax", chunk.max);
                 _mpb.SetFloat("_PointSize", _pointSize);
 
                 _rp.matProps = _mpb;
@@ -167,28 +168,27 @@ public class TpcLoader : MonoBehaviour
 
         // 点群読込準備
         int count = info.count;
-        var positions = new List<Vector3>(count);
-        var colors = new List<Color32>(count);
+        var packed = new TcpPoint[count];
 
         // 点群読込
         for (int i = 0; i < count; i++)
         {
-            float x = _reader.ReadSingle();
-            float y = _reader.ReadSingle();
-            float z = _reader.ReadSingle();
-            byte r = _reader.ReadByte();
-            byte g = _reader.ReadByte();
-            byte b = _reader.ReadByte();
+            ushort x16 = _reader.ReadUInt16();
+            ushort y16 = _reader.ReadUInt16();
+            ushort z16 = _reader.ReadUInt16();
+            byte r8 = _reader.ReadByte();
+            byte g8 = _reader.ReadByte();
+            byte b8 = _reader.ReadByte();
+            byte a8 = _reader.ReadByte();
 
-            positions.Add(new Vector3(x, y, z));
-            colors.Add(new Color32(r, g, b, 255));
+            packed[i].xy = (uint)(x16 | (y16 << 16));
+            packed[i].z = (uint)z16;
+            packed[i].rgba = (uint)(r8 | (g8 << 8) | (b8 << 16) | (255 << 24));
         }
 
         // 点群バッファを作成
-        chunk.positions = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, sizeof(float) * 3);
-        chunk.colors = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, sizeof(uint));
-        chunk.positions.SetData(positions);
-        chunk.colors.SetData(colors);
+        chunk.pointBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, 12);
+        chunk.pointBuffer.SetData(packed);
 
         // 間接描画バッファを作成
         chunk.indirectArgs = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, 1, GraphicsBuffer.IndirectDrawIndexedArgs.size);
@@ -242,11 +242,8 @@ public class TpcLoader : MonoBehaviour
     /// </summary>
     private void UnloadChunkPoints(TcpChunk chunk)
     {
-        chunk.positions?.Dispose();
-        chunk.positions = null;
-
-        chunk.colors?.Dispose();
-        chunk.colors = null;
+        chunk.pointBuffer?.Dispose();
+        chunk.pointBuffer = null;
 
         chunk.indirectArgs?.Dispose();
         chunk.indirectArgs = null;
@@ -314,12 +311,12 @@ public class TcpChunk
     public Vector3 max;
     public TcpLod[] lods;
 
-    public GraphicsBuffer positions;
-    public GraphicsBuffer colors;
+    public GraphicsBuffer pointBuffer;
     public GraphicsBuffer indirectArgs;
 
     public int loadedLod = -1;
-    public bool isLoaded => positions != null;
+
+    public bool isLoaded => pointBuffer != null;
 }
 
 [Serializable]
@@ -327,4 +324,12 @@ public struct TcpLod
 {
     public ulong offset;
     public int count;
+}
+
+[Serializable]
+public struct TcpPoint
+{
+    public uint xy;   // x,y 32bit
+    public uint z;    // z,0 32 bit
+    public uint rgba;  // r,g,b,a 32bit(8bit * 4)
 }
