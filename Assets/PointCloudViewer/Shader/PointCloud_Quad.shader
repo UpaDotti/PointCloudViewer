@@ -20,9 +20,6 @@ Shader "Custom/PointCloud_Quad"
             float3 _ChunkMax;
             float _PointSize;
 
-            // Quad Triangleの頂点 組み合わせ
-            static const uint QUAD_INDEX[6] = { 0,1,2, 2,1,3 };
-
             // Quad四隅のオフセット係数
             static const half2 OFFS4[4] = {
                 half2(-1,-1), half2(+1,-1),
@@ -65,7 +62,7 @@ Shader "Custom/PointCloud_Quad"
                 Varyings o;
 
                 // Quadのどの位置かを「0～3」で取得
-                const uint cornerID = QUAD_INDEX[svVertexID];
+                const uint cornerID = svVertexID;
 
                 // 点群バッファから指定の点データを取得
                 uint3 pointData = _Points[svInstanceID];
