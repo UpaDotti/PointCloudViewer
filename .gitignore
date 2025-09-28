@@ -100,8 +100,10 @@ InitTestScene*.unity*
 
 # Add File
 *.vsconfig
-*.las
 *.tpc
+*.tpc.meta
+*.las
+*.las.meta
 
 # Add Path
 /Assets/PointCloudViewer/Las/
