@@ -285,7 +285,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _filePath: Assets/sample.tpc
-  _pointMaterial: {fileID: 2100000, guid: cc48aa6224a1c644eb326c63e86e1756, type: 2}
+  _pointMaterial: {fileID: 2100000, guid: 98fc76e6e3a384249b3f5ce8eb3a0793, type: 2}
   _maxPointsPerPixel: 1
   _pointSize: 1
   _header:
