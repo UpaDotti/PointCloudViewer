@@ -14,6 +14,12 @@ public class TpcLoader : MonoBehaviour
     private Material _pointMaterial;
 
     [SerializeField]
+    private int _maxChunkLoadsPerFrame = 50; // 1フレームでロードする最大チャンク数
+
+    [SerializeField]
+    private int _maxChunkUnloadsPerFrame = 100; // 1フレームでアンロードする最大チャンク数
+
+    [SerializeField]
     private float _maxPointsPerPixel = 1.0f; // 1ピクセルあたりの許容点密度
 
     [SerializeField]
@@ -26,6 +32,9 @@ public class TpcLoader : MonoBehaviour
     [SerializeField]
     private List<TcpChunk> _chunks;
 
+    private List<TcpChunkRequest> _requests = new List<TcpChunkRequest>();
+
+    private Camera _mainCamera;
     private BinaryReader _reader;
     private RenderParams _rp;
     private MaterialPropertyBlock _mpb;
@@ -37,6 +46,7 @@ public class TpcLoader : MonoBehaviour
 
     private void Start()
     {
+        _mainCamera = Camera.main;
         string fullPath = Path.Combine(Application.dataPath, _filePath.Replace("Assets/", ""));
         LoadHeader(fullPath);
         SetupRendering();
@@ -109,8 +119,9 @@ public class TpcLoader : MonoBehaviour
 
     private void Update()
     {
-        var planes = GeometryUtility.CalculateFrustumPlanes(Camera.main);
+        Plane[] planes = GeometryUtility.CalculateFrustumPlanes(_mainCamera);
 
+        // ロード／アンロードの判定
         foreach (var chunk in _chunks)
         {
             Bounds bounds = new Bounds();
@@ -121,34 +132,116 @@ public class TpcLoader : MonoBehaviour
             if (isVisible)
             {
                 // LODを取得
-                int desiredLod = ChooseLod(chunk);
+                int desiredLod = ChooseLod(chunk, _mainCamera);
 
-                // ロードされていない or LODが違うときは 読込
+                // ロードされていない or LODが違うときはロードをリクエスト
                 if (!chunk.isLoaded || chunk.loadedLod != desiredLod)
                 {
-                    LoadChunkPoints(chunk, desiredLod);
+                    EnqueueLoadRequest(chunk, desiredLod);
                 }
             }
             else
             {
-                if (chunk.isLoaded) UnloadChunkPoints(chunk);
-            }
-
-            // 描画
-            if (chunk.pointBuffer != null)
-            {
-                _mpb.Clear();
-                _mpb.SetBuffer("_Points", chunk.pointBuffer);
-                _mpb.SetVector("_ChunkMin", chunk.min);
-                _mpb.SetVector("_ChunkMax", chunk.max);
-                _mpb.SetFloat("_PointSize", _pointSize);
-
-                _rp.matProps = _mpb;
-                _rp.worldBounds = bounds;
-
-                Graphics.RenderPrimitivesIndexedIndirect(_rp, MeshTopology.Triangles, _quadIndex, chunk.indirectArgs, 1, 0);
+                // ロードされていて視界外のときはアンロード
+                if (chunk.isLoaded)
+                {
+                    EnqueueUnloadRequest(chunk);
+                }
             }
         }
+
+        // ロード／アンロードの処理
+        int loadsThisFrame = 0;
+        int unloadsThisFrame = 0;
+        for (int i = _requests.Count - 1; i >= 0; i--)
+        {
+            var req = _requests[i];
+
+            if (!req.isLoad)
+            {
+                // フレーム毎のアンロード数を制限
+                if (unloadsThisFrame >= _maxChunkUnloadsPerFrame)
+                {
+                    continue;
+                }
+
+                _requests.RemoveAt(i);
+                UnloadChunkPoints(req.chunk);
+                unloadsThisFrame++;
+            }
+            else
+            {
+                // フレーム毎のロード数を制限
+                if (loadsThisFrame >= _maxChunkLoadsPerFrame)
+                {
+                    continue;
+                }
+
+                _requests.RemoveAt(i);
+                LoadChunkPoints(req.chunk, req.lod);
+                loadsThisFrame++;
+            }
+        }
+
+        // 描画
+        foreach (var chunk in _chunks)
+        {
+            if (!chunk.isLoaded) continue;
+
+            Bounds bounds = new Bounds();
+            bounds.SetMinMax(chunk.min, chunk.max);
+
+            _mpb.Clear();
+            _mpb.SetBuffer("_Points", chunk.pointBuffer);
+            _mpb.SetVector("_ChunkMin", chunk.min);
+            _mpb.SetVector("_ChunkMax", chunk.max);
+            _mpb.SetFloat("_PointSize", _pointSize);
+
+            _rp.matProps = _mpb;
+            _rp.worldBounds = bounds;
+
+            Graphics.RenderPrimitivesIndexedIndirect(_rp, MeshTopology.Triangles, _quadIndex, chunk.indirectArgs, 1, 0);
+        }
+    }
+
+    /// <summary>
+    /// ロードリクエストを追加
+    /// </summary>
+    private void EnqueueLoadRequest(TcpChunk chunk, int lod)
+    {
+        for (int i = 0; i < _requests.Count; i++)
+        {
+            // すでにこのチャンクのリクエストがあるか
+            if (ReferenceEquals(_requests[i].chunk, chunk))
+            {
+                // 指示を上書き
+                _requests[i] = new TcpChunkRequest { chunk = chunk, lod = lod, isLoad = true };
+                return;
+            }
+        }
+
+        // なければ新規追加
+        _requests.Add(new TcpChunkRequest { chunk = chunk, lod = lod, isLoad = true });
+    }
+
+    /// <summary>
+    /// アンロードリクエストを追加
+    /// </summary>
+    private void EnqueueUnloadRequest(TcpChunk chunk)
+    {
+        for (int i = 0; i < _requests.Count; i++)
+        {
+            // すでにこのチャンクのリクエストがあるか
+            if (ReferenceEquals(_requests[i].chunk, chunk))
+            {
+                // 指示を上書き
+                _requests[i] = new TcpChunkRequest { chunk = chunk, lod = _requests[i].lod, isLoad = false };
+                return;
+            }
+        }
+
+        // なければ新規追加
+        _requests.Add(new TcpChunkRequest { chunk = chunk, lod = 0, isLoad = false });
     }
 
     /// <summary>
@@ -206,10 +299,8 @@ public class TpcLoader : MonoBehaviour
     /// <summary>
     /// LODを選択
     /// </summary>
-    private int ChooseLod(TcpChunk chunk)
+    private int ChooseLod(TcpChunk chunk, Camera camera)
     {
-        var camera = Camera.main;
-
         Bounds bounds = new Bounds();
         bounds.SetMinMax(chunk.min, chunk.max);
 
@@ -332,4 +423,12 @@ public struct TcpPoint
     public uint xy;   // x,y 32bit
     public uint z;    // z,0 32 bit
     public uint rgba;  // r,g,b,a 32bit(8bit * 4)
+}
+
+[Serializable]
+public struct TcpChunkRequest
+{
+    public TcpChunk chunk;
+    public int lod;
+    public bool isLoad;
 }

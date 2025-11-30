@@ -286,6 +286,8 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _filePath: Assets/sample.tpc
   _pointMaterial: {fileID: 2100000, guid: 98fc76e6e3a384249b3f5ce8eb3a0793, type: 2}
+  _maxChunkLoadsPerFrame: 50
+  _maxChunkUnloadsPerFrame: 100
   _maxPointsPerPixel: 1
   _pointSize: 1
   _header:
