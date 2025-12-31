@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEngine;
@@ -16,12 +17,16 @@ public class OpcReader : MonoBehaviour
     [SerializeField]
     private OpcHeader _header;
 
+    [SerializeField]
+    private List<OpcLeaf> _leaves;
+
 
 
     private void Start()
     {
         _reader = OpenFile(_filePath);
         _header = ReadHeader(_reader);
+        _leaves = ReadLeaves(_reader, _header);
     }
 
     private BinaryReader OpenFile(string filePath)
@@ -68,6 +73,34 @@ public class OpcReader : MonoBehaviour
         return header;
     }
 
+    private List<OpcLeaf> ReadLeaves(BinaryReader reader, OpcHeader header)
+    {
+        var leaves = new List<OpcLeaf>((int)header.leafCount);
+
+        for (int i = 0; i < header.leafCount; i++)
+        {
+            var leaf = new OpcLeaf();
+
+            leaf.depth = reader.ReadByte();
+            leaf.path = reader.ReadUInt64();
+
+            leaf.min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            leaf.max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+
+            leaf.baseOffset = reader.ReadUInt64();
+
+            leaf.lodCounts = new uint[header.lodCount];
+            for (int lod = 0; lod < header.lodCount; lod++)
+            {
+                leaf.lodCounts[lod] = reader.ReadUInt32();
+            }
+
+            leaves.Add(leaf);
+        }
+
+        return leaves;
+    }
+
     private void OnDisable()
     {
         CloseReader();
@@ -109,4 +142,18 @@ public class OpcHeader
     [Header("Status")]
     public uint leafCount;
     public ulong totalPoints;
+}
+
+[Serializable]
+public class OpcLeaf
+{
+    public byte depth;
+    public ulong path; // 10進法
+
+    public Vector3 min;
+    public Vector3 max;
+
+    public ulong baseOffset;
+
+    public uint[] lodCounts;
 }
