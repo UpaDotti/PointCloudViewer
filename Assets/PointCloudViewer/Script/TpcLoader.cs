@@ -27,12 +27,12 @@ public class TpcLoader : MonoBehaviour
 
     // 状態
     [SerializeField]
-    private TcpHeader _header;
+    private TpcHeader _header;
 
     [SerializeField]
-    private List<TcpChunk> _chunks;
+    private List<TpcChunk> _chunks;
 
-    private List<TcpChunkRequest> _requests = new List<TcpChunkRequest>();
+    private List<TpcChunkRequest> _requests = new List<TpcChunkRequest>();
 
     private Camera _mainCamera;
     private BinaryReader _reader;
@@ -57,8 +57,8 @@ public class TpcLoader : MonoBehaviour
     /// </summary>
     private void LoadHeader(string fullPath)
     {
-        _header = new TcpHeader();
-        _chunks = new List<TcpChunk>();
+        _header = new TpcHeader();
+        _chunks = new List<TpcChunk>();
         _reader = new BinaryReader(File.OpenRead(fullPath));
 
         long start = _reader.BaseStream.Position;
@@ -84,14 +84,14 @@ public class TpcLoader : MonoBehaviour
             Vector3 min = new Vector3(_reader.ReadSingle(), _reader.ReadSingle(), _reader.ReadSingle());
             Vector3 max = new Vector3(_reader.ReadSingle(), _reader.ReadSingle(), _reader.ReadSingle());
 
-            var lods = new TcpLod[_header.lodLevels];
+            var lods = new TpcLod[_header.lodLevels];
             for (int l = 0; l < _header.lodLevels; l++)
             {
                 lods[l].offset = _reader.ReadUInt64();
                 lods[l].count = _reader.ReadInt32();
             }
 
-            _chunks.Add(new TcpChunk { index = index, min = min, max = max, lods = lods });
+            _chunks.Add(new TpcChunk { index = index, min = min, max = max, lods = lods });
         }
 
         // チャンクサイズを取得
@@ -207,7 +207,7 @@ public class TpcLoader : MonoBehaviour
     /// <summary>
     /// ロードリクエストを追加
     /// </summary>
-    private void EnqueueLoadRequest(TcpChunk chunk, int lod)
+    private void EnqueueLoadRequest(TpcChunk chunk, int lod)
     {
         for (int i = 0; i < _requests.Count; i++)
         {
@@ -215,19 +215,19 @@ public class TpcLoader : MonoBehaviour
             if (ReferenceEquals(_requests[i].chunk, chunk))
             {
                 // 指示を上書き
-                _requests[i] = new TcpChunkRequest { chunk = chunk, lod = lod, isLoad = true };
+                _requests[i] = new TpcChunkRequest { chunk = chunk, lod = lod, isLoad = true };
                 return;
             }
         }
 
         // なければ新規追加
-        _requests.Add(new TcpChunkRequest { chunk = chunk, lod = lod, isLoad = true });
+        _requests.Add(new TpcChunkRequest { chunk = chunk, lod = lod, isLoad = true });
     }
 
     /// <summary>
     /// アンロードリクエストを追加
     /// </summary>
-    private void EnqueueUnloadRequest(TcpChunk chunk)
+    private void EnqueueUnloadRequest(TpcChunk chunk)
     {
         for (int i = 0; i < _requests.Count; i++)
         {
@@ -235,19 +235,19 @@ public class TpcLoader : MonoBehaviour
             if (ReferenceEquals(_requests[i].chunk, chunk))
             {
                 // 指示を上書き
-                _requests[i] = new TcpChunkRequest { chunk = chunk, lod = _requests[i].lod, isLoad = false };
+                _requests[i] = new TpcChunkRequest { chunk = chunk, lod = _requests[i].lod, isLoad = false };
                 return;
             }
         }
 
         // なければ新規追加
-        _requests.Add(new TcpChunkRequest { chunk = chunk, lod = 0, isLoad = false });
+        _requests.Add(new TpcChunkRequest { chunk = chunk, lod = 0, isLoad = false });
     }
 
     /// <summary>
     /// 分割点群をロード
     /// </summary>
-    private void LoadChunkPoints(TcpChunk chunk, int lod)
+    private void LoadChunkPoints(TpcChunk chunk, int lod)
     {
         // すでにMeshがある場合はアンロード
         UnloadChunkPoints(chunk);
@@ -261,7 +261,7 @@ public class TpcLoader : MonoBehaviour
 
         // 点群読込準備
         int count = info.count;
-        var packed = new TcpPoint[count];
+        var packed = new TpcPoint[count];
 
         // 点群読込
         for (int i = 0; i < count; i++)
@@ -299,7 +299,7 @@ public class TpcLoader : MonoBehaviour
     /// <summary>
     /// LODを選択
     /// </summary>
-    private int ChooseLod(TcpChunk chunk, Camera camera)
+    private int ChooseLod(TpcChunk chunk, Camera camera)
     {
         Bounds bounds = new Bounds();
         bounds.SetMinMax(chunk.min, chunk.max);
@@ -331,7 +331,7 @@ public class TpcLoader : MonoBehaviour
     /// <summary>
     /// 分割点群をアンロード
     /// </summary>
-    private void UnloadChunkPoints(TcpChunk chunk)
+    private void UnloadChunkPoints(TpcChunk chunk)
     {
         chunk.pointBuffer?.Dispose();
         chunk.pointBuffer = null;
@@ -382,7 +382,7 @@ public class TpcLoader : MonoBehaviour
 }
 
 [Serializable]
-public class TcpHeader
+public class TpcHeader
 {
     public string magic;
     public int versionMajor;
@@ -395,12 +395,12 @@ public class TcpHeader
 }
 
 [Serializable]
-public class TcpChunk
+public class TpcChunk
 {
     public Vector3Int index;
     public Vector3 min;
     public Vector3 max;
-    public TcpLod[] lods;
+    public TpcLod[] lods;
 
     public GraphicsBuffer pointBuffer;
     public GraphicsBuffer indirectArgs;
@@ -411,14 +411,14 @@ public class TcpChunk
 }
 
 [Serializable]
-public struct TcpLod
+public struct TpcLod
 {
     public ulong offset;
     public int count;
 }
 
 [Serializable]
-public struct TcpPoint
+public struct TpcPoint
 {
     public uint xy;   // x,y 32bit
     public uint z;    // z,0 32 bit
@@ -426,9 +426,9 @@ public struct TcpPoint
 }
 
 [Serializable]
-public struct TcpChunkRequest
+public struct TpcChunkRequest
 {
-    public TcpChunk chunk;
+    public TpcChunk chunk;
     public int lod;
     public bool isLoad;
 }
