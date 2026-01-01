@@ -17,7 +17,8 @@ public class OpcReader : MonoBehaviour
     [SerializeField]
     private OpcHeader _header;
 
-    [SerializeField]
+    private List<OpcBranch> _branches;
+
     private List<OpcLeaf> _leaves;
 
 
@@ -26,6 +27,7 @@ public class OpcReader : MonoBehaviour
     {
         _reader = OpenFile(_filePath);
         _header = ReadHeader(_reader);
+        _branches = ReadBranches(_reader, _header);
         _leaves = ReadLeaves(_reader, _header);
     }
 
@@ -67,10 +69,43 @@ public class OpcReader : MonoBehaviour
         }
 
         // Stats
-        header.leafCount = reader.ReadUInt32();
         header.totalPoints = reader.ReadUInt64();
+        header.branchCount = reader.ReadUInt32();
+        header.leafCount = reader.ReadUInt32();
 
         return header;
+    }
+
+    private List<OpcBranch> ReadBranches(BinaryReader reader, OpcHeader header)
+    {
+        var branches = new List<OpcBranch>((int)header.branchCount);
+
+        for (int i = 0; i < header.branchCount; i++)
+        {
+            var branch = new OpcBranch();
+
+            branch.depth = reader.ReadByte();
+            branch.path = reader.ReadUInt64();
+
+            Vector3 min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            Vector3 max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            branch.min = min;
+            branch.max = max;
+
+            // children有無
+            branch.child0 = reader.ReadByte() != 0;
+            branch.child1 = reader.ReadByte() != 0;
+            branch.child2 = reader.ReadByte() != 0;
+            branch.child3 = reader.ReadByte() != 0;
+            branch.child4 = reader.ReadByte() != 0;
+            branch.child5 = reader.ReadByte() != 0;
+            branch.child6 = reader.ReadByte() != 0;
+            branch.child7 = reader.ReadByte() != 0;
+
+            branches.Add(branch);
+        }
+
+        return branches;
     }
 
     private List<OpcLeaf> ReadLeaves(BinaryReader reader, OpcHeader header)
@@ -140,15 +175,35 @@ public class OpcHeader
     public uint[] lodSteps;
 
     [Header("Status")]
-    public uint leafCount;
     public ulong totalPoints;
+    public uint leafCount;
+    public uint branchCount;
+}
+
+[Serializable]
+public class OpcBranch
+{
+    public int depth;
+    public ulong path;
+
+    public Vector3 min;
+    public Vector3 max;
+
+    public bool child0;
+    public bool child1;
+    public bool child2;
+    public bool child3;
+    public bool child4;
+    public bool child5;
+    public bool child6;
+    public bool child7;
 }
 
 [Serializable]
 public class OpcLeaf
 {
     public byte depth;
-    public ulong path; // 10進法
+    public ulong path;
 
     public Vector3 min;
     public Vector3 max;
