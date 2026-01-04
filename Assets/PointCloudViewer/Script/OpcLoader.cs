@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEngine;
+using static OpcReader;
 
 public class OpcReader : MonoBehaviour
 {
@@ -15,11 +16,11 @@ public class OpcReader : MonoBehaviour
     private BinaryReader _reader;
 
     [SerializeField]
-    private OpcHeader _header;
+    private Header _header;
 
-    private List<OpcBranch> _branches;
+    private List<Branch> _branches;
 
-    private List<OpcLeaf> _leaves;
+    private List<Leaf> _leaves;
 
 
 
@@ -29,6 +30,7 @@ public class OpcReader : MonoBehaviour
         _header = ReadHeader(_reader);
         _branches = ReadBranches(_reader, _header);
         _leaves = ReadLeaves(_reader, _header);
+        BuildReference(_branches, _leaves);
     }
 
     private BinaryReader OpenFile(string filePath)
@@ -38,7 +40,7 @@ public class OpcReader : MonoBehaviour
         return new BinaryReader(File.OpenRead(fullPath));
     }
 
-    private OpcHeader ReadHeader(BinaryReader reader)
+    private Header ReadHeader(BinaryReader reader)
     {
         // OPCファイルかをチェック
         byte[] magic = reader.ReadBytes(4);
@@ -48,7 +50,7 @@ public class OpcReader : MonoBehaviour
             return null;
         }
 
-        OpcHeader header = new OpcHeader();
+        Header header = new Header();
 
         // Version
         header.versionMajor = reader.ReadByte();
@@ -76,31 +78,19 @@ public class OpcReader : MonoBehaviour
         return header;
     }
 
-    private List<OpcBranch> ReadBranches(BinaryReader reader, OpcHeader header)
+    private List<Branch> ReadBranches(BinaryReader reader, Header header)
     {
-        var branches = new List<OpcBranch>((int)header.branchCount);
+        var branches = new List<Branch>((int)header.branchCount);
 
         for (int i = 0; i < header.branchCount; i++)
         {
-            var branch = new OpcBranch();
+            var branch = new Branch();
 
             branch.depth = reader.ReadByte();
             branch.path = reader.ReadUInt64();
 
-            Vector3 min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-            Vector3 max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-            branch.min = min;
-            branch.max = max;
-
-            // children有無
-            branch.child0 = reader.ReadByte() != 0;
-            branch.child1 = reader.ReadByte() != 0;
-            branch.child2 = reader.ReadByte() != 0;
-            branch.child3 = reader.ReadByte() != 0;
-            branch.child4 = reader.ReadByte() != 0;
-            branch.child5 = reader.ReadByte() != 0;
-            branch.child6 = reader.ReadByte() != 0;
-            branch.child7 = reader.ReadByte() != 0;
+            branch.min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            branch.max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
 
             branches.Add(branch);
         }
@@ -108,13 +98,13 @@ public class OpcReader : MonoBehaviour
         return branches;
     }
 
-    private List<OpcLeaf> ReadLeaves(BinaryReader reader, OpcHeader header)
+    private List<Leaf> ReadLeaves(BinaryReader reader, Header header)
     {
-        var leaves = new List<OpcLeaf>((int)header.leafCount);
+        var leaves = new List<Leaf>((int)header.leafCount);
 
         for (int i = 0; i < header.leafCount; i++)
         {
-            var leaf = new OpcLeaf();
+            var leaf = new Leaf();
 
             leaf.depth = reader.ReadByte();
             leaf.path = reader.ReadUInt64();
@@ -136,6 +126,51 @@ public class OpcReader : MonoBehaviour
         return leaves;
     }
 
+    private void BuildReference(List<Branch> branches, List<Leaf> leaves)
+    {
+        // パスとインデックスの辞書を作成
+        var branchIndexByPath = new Dictionary<ulong, int>(branches.Count);
+        var leafIndexByPath = new Dictionary<ulong, int>(leaves.Count);
+        for (int i = 0; i < branches.Count; i++)
+        {
+            branchIndexByPath[branches[i].path] = i;
+        }
+        for (int i = 0; i < leaves.Count; i++)
+        {
+            leafIndexByPath[leaves[i].path] = i;
+        }
+
+        // 関係を構築
+        for (int i = 0; i < branches.Count; i++)
+        {
+            Branch branch = branches[i];
+
+            for (int child = 0; child < 8; child++)
+            {
+                ulong childPath = (branch.path << 3) | (ulong)(uint)child;
+
+                NodeReference nodeRef = new NodeReference { index = -1, isLeaf = false };
+
+                if (branchIndexByPath.TryGetValue(childPath, out int bIndex))
+                {
+                    nodeRef.isLeaf = false;
+                    nodeRef.index = bIndex;
+                }
+                else if (leafIndexByPath.TryGetValue(childPath, out int lIndex))
+                {
+                    nodeRef.isLeaf = true;
+                    nodeRef.index = lIndex;
+                }
+                else
+                {
+
+                }
+
+                branch.references[child] = nodeRef;
+            }
+        }
+    }
+
     private void OnDisable()
     {
         CloseReader();
@@ -155,60 +190,63 @@ public class OpcReader : MonoBehaviour
             _reader = null;
         }
     }
-}
 
-[Serializable]
-public class OpcHeader
-{
-    [Header("Vsersion")]
-    public byte versionMajor;
-    public byte versionMinor;
-    public byte versionPatch;
+    [Serializable]
+    public class Header
+    {
+        [Header("Vsersion")]
+        public byte versionMajor;
+        public byte versionMinor;
+        public byte versionPatch;
 
-    [Header("Bound")]
-    public Vector3 size;
-    public Vector3 rootMin;
-    public Vector3 rootMax;
+        [Header("Bound")]
+        public Vector3 size;
+        public Vector3 rootMin;
+        public Vector3 rootMax;
 
-    [Header("LOD")]
-    public byte lodCount;
-    public uint[] lodSteps;
+        [Header("LOD")]
+        public byte lodCount;
+        public uint[] lodSteps;
 
-    [Header("Status")]
-    public ulong totalPoints;
-    public uint leafCount;
-    public uint branchCount;
-}
+        [Header("Status")]
+        public ulong totalPoints;
+        public uint leafCount;
+        public uint branchCount;
+    }
 
-[Serializable]
-public class OpcBranch
-{
-    public int depth;
-    public ulong path;
+    [Serializable]
+    public class Branch
+    {
+        public byte depth;
+        public ulong path;
 
-    public Vector3 min;
-    public Vector3 max;
+        public Vector3 min;
+        public Vector3 max;
 
-    public bool child0;
-    public bool child1;
-    public bool child2;
-    public bool child3;
-    public bool child4;
-    public bool child5;
-    public bool child6;
-    public bool child7;
-}
+        public NodeReference[] references = new NodeReference[8];
+    }
 
-[Serializable]
-public class OpcLeaf
-{
-    public byte depth;
-    public ulong path;
+    [Serializable]
+    public class Leaf
+    {
+        public byte depth;
+        public ulong path;
 
-    public Vector3 min;
-    public Vector3 max;
+        public Vector3 min;
+        public Vector3 max;
 
-    public ulong baseOffset;
+        public ulong baseOffset;
 
-    public uint[] lodCounts;
+        public uint[] lodCounts;
+    }
+
+    [Serializable]
+    public struct NodeReference
+    {
+        public bool isLeaf;
+
+        public int index;
+
+        public bool IsValid => index >= 0;
+    }
 }
