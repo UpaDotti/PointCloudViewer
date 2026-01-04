@@ -119,66 +119,6 @@ NavMeshSettings:
     debug:
       m_Flags: 0
   m_NavMeshData: {fileID: 0}
---- !u!1 &10186610
-GameObject:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  serializedVersion: 6
-  m_Component:
-  - component: {fileID: 10186612}
-  - component: {fileID: 10186611}
-  m_Layer: 0
-  m_Name: TpcLoader
-  m_TagString: Untagged
-  m_Icon: {fileID: 0}
-  m_NavMeshLayer: 0
-  m_StaticEditorFlags: 0
-  m_IsActive: 0
---- !u!114 &10186611
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 10186610}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 2796099f18bd80842a7150b2a2c7f6e0, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: 
-  _filePath: Assets/sample.tpc
-  _pointMaterial: {fileID: 2100000, guid: 98fc76e6e3a384249b3f5ce8eb3a0793, type: 2}
-  _maxChunkLoadsPerFrame: 50
-  _maxChunkUnloadsPerFrame: 100
-  _maxPointsPerPixel: 1
-  _pointSize: 1
-  _header:
-    magic: 
-    versionMajor: 0
-    versionMinor: 0
-    versionPatch: 0
-    lodLevels: 0
-    gridSize: 0
-    chunkCount: 0
-    center: {x: 0, y: 0, z: 0}
-  _chunks: []
---- !u!4 &10186612
-Transform:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 10186610}
-  serializedVersion: 2
-  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: 1, z: 1}
-  m_ConstrainProportionsScale: 0
-  m_Children: []
-  m_Father: {fileID: 0}
-  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!1 &943014116
 GameObject:
   m_ObjectHideFlags: 0
@@ -330,18 +270,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _filePath: Assets/sample_mini.opc
-  _header:
-    versionMajor: 0
-    versionMinor: 0
-    versionPatch: 0
-    center: {x: 0, y: 0, z: 0}
-    rootMin: {x: 0, y: 0, z: 0}
-    rootMax: {x: 0, y: 0, z: 0}
-    size: {x: 0, y: 0, z: 0}
-    lodCount: 0
-    lodSteps: 
-    totalPoints: 0
-    leafCount: 0
+  _isDrawVisibleLeafGizmos: 0
 --- !u!4 &1022487359
 Transform:
   m_ObjectHideFlags: 0
@@ -517,5 +446,4 @@ SceneRoots:
   m_Roots:
   - {fileID: 1887553526}
   - {fileID: 943014118}
-  - {fileID: 10186612}
   - {fileID: 1022487359}

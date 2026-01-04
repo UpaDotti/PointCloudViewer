@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Unity.VisualScripting;
 using UnityEngine;
 using static OpcReader;
 
@@ -11,16 +12,19 @@ public class OpcReader : MonoBehaviour
     [SerializeField]
     private string _filePath = "Assets/sample.opc";
 
-    // 状態
+    [SerializeField]
+    private bool _isDrawVisibleLeafGizmos = false;
+
     [NonSerialized]
     private BinaryReader _reader;
 
-    [SerializeField]
     private Header _header;
-
-    private List<Branch> _branches;
-
-    private List<Leaf> _leaves;
+    private List<Branch> _branches = new List<Branch>();
+    private List<Leaf> _leaves = new List<Leaf>();
+    private int _rootBranchIndex = -1;
+    private Camera _mainCamera;
+    private List<int> _visibleLeafIndices = new List<int>();
+    private Queue<int> _branchIndicesToCheck = new Queue<int>();
 
 
 
@@ -31,6 +35,13 @@ public class OpcReader : MonoBehaviour
         _branches = ReadBranches(_reader, _header);
         _leaves = ReadLeaves(_reader, _header);
         BuildReference(_branches, _leaves);
+        _rootBranchIndex = GetRootBranchIndex(_branches);
+        _mainCamera = Camera.main;
+    }
+
+    private void Update()
+    {
+        GetVisibleLeafIndices();
     }
 
     private BinaryReader OpenFile(string filePath)
@@ -89,8 +100,11 @@ public class OpcReader : MonoBehaviour
             branch.depth = reader.ReadByte();
             branch.path = reader.ReadUInt64();
 
-            branch.min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-            branch.max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            Vector3 min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            Vector3 max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            Vector3 center = (min + max) * 0.5f;
+            Vector3 size = max - min;
+            branch.bounds = new Bounds(center, size);
 
             branches.Add(branch);
         }
@@ -109,8 +123,11 @@ public class OpcReader : MonoBehaviour
             leaf.depth = reader.ReadByte();
             leaf.path = reader.ReadUInt64();
 
-            leaf.min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-            leaf.max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            Vector3 min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            Vector3 max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+            Vector3 center = (min + max) * 0.5f;
+            Vector3 size = max - min;
+            leaf.bounds = new Bounds(center, size);
 
             leaf.baseOffset = reader.ReadUInt64();
 
@@ -171,6 +188,71 @@ public class OpcReader : MonoBehaviour
         }
     }
 
+    public void GetVisibleLeafIndices()
+    {
+        // 初期化
+        _visibleLeafIndices.Clear();
+        _branchIndicesToCheck.Clear();
+
+        // 可視ボックス
+        Plane[] planes = GeometryUtility.CalculateFrustumPlanes(_mainCamera);
+
+        // ルートブランチを追加
+        _branchIndicesToCheck.Enqueue(_rootBranchIndex);
+
+        // 判定ループ
+        while (_branchIndicesToCheck.Count > 0)
+        {
+            // 判定対象の枝を取得
+            int branchIndex = _branchIndicesToCheck.Dequeue();
+            Branch branch = _branches[branchIndex];
+
+            // 枝が見えているか
+            if (!GeometryUtility.TestPlanesAABB(planes, branch.bounds))
+            {
+                // 子の判定をスキップ
+                continue;
+            }
+
+            // 見えている子のノードを処理
+            for (int i = 0; i < branch.references.Length; i++)
+            {
+                NodeReference nodeRef = branch.references[i];
+
+                // 存在するか
+                if (!nodeRef.IsValid) continue;
+
+                // ノードは葉か
+                if (nodeRef.isLeaf)
+                {
+                    // 見える場合は返すリストに追加
+                    Leaf leaf = _leaves[nodeRef.index];
+                    if (GeometryUtility.TestPlanesAABB(planes, leaf.bounds))
+                    {
+                        _visibleLeafIndices.Add(nodeRef.index);
+                    }
+                }
+                else
+                {
+                    // 判定処理として追加
+                    _branchIndicesToCheck.Enqueue(nodeRef.index);
+                }
+            }
+        }
+    }
+
+    private int GetRootBranchIndex(List<Branch> branches)
+    {
+        for (int i = 0; i < branches.Count; i++)
+        {
+            if (branches[i].depth == 0)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     private void OnDisable()
     {
         CloseReader();
@@ -188,6 +270,33 @@ public class OpcReader : MonoBehaviour
             _reader.Close();
             _reader.Dispose();
             _reader = null;
+        }
+    }
+
+    private void OnDrawGizmos()
+    {
+        DrawVisibleLeavesGizmos();
+    }
+
+    private void DrawVisibleLeavesGizmos()
+    {
+        if (!_isDrawVisibleLeafGizmos) return;
+
+        foreach (int leafIndex in _visibleLeafIndices)
+        {
+            Leaf leaf = _leaves[leafIndex];
+
+            Vector3 center = leaf.bounds.center;
+            Vector3 size = leaf.bounds.size;
+
+            float t = Mathf.InverseLerp(0, 10, leaf.depth);
+
+            Color color = Color.HSVToRGB(t, 1f, 1f);
+
+            color.a = 0.7f;
+
+            Gizmos.color = color;
+            Gizmos.DrawCube(center, size);
         }
     }
 
@@ -220,8 +329,7 @@ public class OpcReader : MonoBehaviour
         public byte depth;
         public ulong path;
 
-        public Vector3 min;
-        public Vector3 max;
+        public Bounds bounds;
 
         public NodeReference[] references = new NodeReference[8];
     }
@@ -232,8 +340,7 @@ public class OpcReader : MonoBehaviour
         public byte depth;
         public ulong path;
 
-        public Vector3 min;
-        public Vector3 max;
+        public Bounds bounds;
 
         public ulong baseOffset;
 
