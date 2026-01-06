@@ -21,6 +21,7 @@ public class OpcReader : MonoBehaviour
     private Header _header;
     private List<Branch> _branches = new List<Branch>();
     private List<Leaf> _leaves = new List<Leaf>();
+    private long _bodyStart = -1;
     private int _rootBranchIndex = -1;
     private Camera _mainCamera;
     private List<int> _visibleLeafIndices = new List<int>();
@@ -30,18 +31,22 @@ public class OpcReader : MonoBehaviour
 
     private void Start()
     {
+        _mainCamera = Camera.main;
         _reader = OpenFile(_filePath);
         _header = ReadHeader(_reader);
         _branches = ReadBranches(_reader, _header);
         _leaves = ReadLeaves(_reader, _header);
-        BuildReference(_branches, _leaves);
+        _bodyStart = GetBodyStart();
         _rootBranchIndex = GetRootBranchIndex(_branches);
-        _mainCamera = Camera.main;
+        BuildReference(_branches, _leaves);
     }
 
     private void Update()
     {
+        // 視界に入っているか
         GetVisibleLeafIndices();
+
+        // ロード処理
     }
 
     private BinaryReader OpenFile(string filePath)
@@ -82,9 +87,10 @@ public class OpcReader : MonoBehaviour
         }
 
         // Stats
-        header.totalPoints = reader.ReadUInt64();
         header.branchCount = reader.ReadUInt32();
         header.leafCount = reader.ReadUInt32();
+        header.totalPoints = reader.ReadUInt64();
+        header.pointStrideBytes = reader.ReadUInt16();
 
         return header;
     }
@@ -141,6 +147,23 @@ public class OpcReader : MonoBehaviour
         }
 
         return leaves;
+    }
+
+    private long GetBodyStart()
+    {
+        return _reader.BaseStream.Position;
+    }
+
+    private int GetRootBranchIndex(List<Branch> branches)
+    {
+        for (int i = 0; i < branches.Count; i++)
+        {
+            if (branches[i].depth == 0)
+            {
+                return i;
+            }
+        }
+        return -1;
     }
 
     private void BuildReference(List<Branch> branches, List<Leaf> leaves)
@@ -241,18 +264,6 @@ public class OpcReader : MonoBehaviour
         }
     }
 
-    private int GetRootBranchIndex(List<Branch> branches)
-    {
-        for (int i = 0; i < branches.Count; i++)
-        {
-            if (branches[i].depth == 0)
-            {
-                return i;
-            }
-        }
-        return -1;
-    }
-
     private void OnDisable()
     {
         CloseReader();
@@ -318,9 +329,10 @@ public class OpcReader : MonoBehaviour
         public uint[] lodSteps;
 
         [Header("Status")]
-        public ulong totalPoints;
         public uint leafCount;
         public uint branchCount;
+        public ulong totalPoints;
+        public ushort pointStrideBytes;
     }
 
     [Serializable]
