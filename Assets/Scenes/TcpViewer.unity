@@ -270,7 +270,9 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   _filePath: Assets/sample_mini.opc
+  _maxPointsPerPixel: 1
   _isDrawVisibleLeafGizmos: 0
+  _isDrawCoseLeafLodGizmos: 1
 --- !u!4 &1022487359
 Transform:
   m_ObjectHideFlags: 0

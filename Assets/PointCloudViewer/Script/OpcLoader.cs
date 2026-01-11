@@ -8,12 +8,19 @@ using static OpcReader;
 
 public class OpcReader : MonoBehaviour
 {
-    // 設定
+    [Header("Setting")]
     [SerializeField]
     private string _filePath = "Assets/sample.opc";
 
     [SerializeField]
-    private bool _isDrawVisibleLeafGizmos = false;
+    private float _maxPointsPerPixel = 1.0f;
+
+    [Header("Debug")]
+    [SerializeField]
+    private bool _drawVisibleGizmos = false;
+
+    [SerializeField]
+    private bool _drawLodGizmos = false;
 
     [NonSerialized]
     private BinaryReader _reader;
@@ -26,6 +33,7 @@ public class OpcReader : MonoBehaviour
     private Camera _mainCamera;
     private List<int> _visibleLeafIndices = new List<int>();
     private Queue<int> _branchIndicesToCheck = new Queue<int>();
+    private List<LoadLeaf> _loadLeafs = new List<LoadLeaf>();
 
 
 
@@ -39,14 +47,6 @@ public class OpcReader : MonoBehaviour
         _bodyStart = GetBodyStart();
         _rootBranchIndex = GetRootBranchIndex(_branches);
         BuildReference(_branches, _leaves);
-    }
-
-    private void Update()
-    {
-        // 視界に入っているか
-        GetVisibleLeafIndices();
-
-        // ロード処理
     }
 
     private BinaryReader OpenFile(string filePath)
@@ -211,7 +211,18 @@ public class OpcReader : MonoBehaviour
         }
     }
 
-    public void GetVisibleLeafIndices()
+
+
+    private void Update()
+    {
+        // 視界に入っているか
+        GetVisibleLeafIndices();
+
+        // LODを選択
+        ChooseLeafLod();
+    }
+
+    private void GetVisibleLeafIndices()
     {
         // 初期化
         _visibleLeafIndices.Clear();
@@ -264,6 +275,51 @@ public class OpcReader : MonoBehaviour
         }
     }
 
+    private void ChooseLeafLod()
+    {
+        _loadLeafs.Clear();
+
+        foreach (int leafIndex in _visibleLeafIndices)
+        {
+            int lod = ChooseLod(_leaves[leafIndex]);
+            var loadLeaf = new LoadLeaf { leafIndex = leafIndex, lod = lod };
+            _loadLeafs.Add(loadLeaf);
+        }
+    }
+
+    private int ChooseLod(Leaf leaf)
+    {
+        Bounds bounds = leaf.bounds;
+
+        // Bounds円の半径を取得
+        float r = bounds.extents.magnitude;
+
+        // Bounds円の半径をピクセル数で取得
+        Vector3 center = bounds.center;
+        Vector3 sc = _mainCamera.WorldToScreenPoint(center);
+        Vector3 sx = _mainCamera.WorldToScreenPoint(center + _mainCamera.transform.right * r);
+        Vector3 sy = _mainCamera.WorldToScreenPoint(center + _mainCamera.transform.up * r);
+        float rPxX = (sx - sc).magnitude;
+        float rPxY = (sy - sc).magnitude;
+        float rPx = Mathf.Max(rPxX, rPxY);
+
+        // Bounds円の面積をピクセル数で取得
+        float areaPx = Mathf.Max(1f, Mathf.PI * rPx * rPx);
+
+        // 閾値より低い場合にLODを返す
+        for (int i = 0; i < leaf.lodCounts.Length; i++)
+        {
+            uint count = leaf.lodCounts[i];
+            float density = count / areaPx;
+            if (density <= _maxPointsPerPixel) return i;
+        }
+
+        // 最も粗いLODを返す
+        return leaf.lodCounts.Length - 1;
+    }
+
+
+
     private void OnDisable()
     {
         CloseReader();
@@ -286,12 +342,13 @@ public class OpcReader : MonoBehaviour
 
     private void OnDrawGizmos()
     {
-        DrawVisibleLeavesGizmos();
+        DrawVisibleGizmos();
+        DrawLodGizmos();
     }
 
-    private void DrawVisibleLeavesGizmos()
+    private void DrawVisibleGizmos()
     {
-        if (!_isDrawVisibleLeafGizmos) return;
+        if (!_drawVisibleGizmos) return;
 
         foreach (int leafIndex in _visibleLeafIndices)
         {
@@ -310,6 +367,31 @@ public class OpcReader : MonoBehaviour
             Gizmos.DrawCube(center, size);
         }
     }
+
+    private void DrawLodGizmos()
+    {
+        if (!_drawLodGizmos) return;
+
+        foreach (var loadLeaf in _loadLeafs)
+        {
+            Leaf leaf = _leaves[loadLeaf.leafIndex];
+
+            Vector3 center = leaf.bounds.center;
+            Vector3 size = leaf.bounds.size;
+
+            int maxLodIndex = _header.lodCount - 1;
+            float t = (maxLodIndex == 0) ? 0f : (loadLeaf.lod / (float)maxLodIndex);
+
+            Color color = Color.HSVToRGB(t, 1f, 1f);
+
+            color.a = 0.7f;
+
+            Gizmos.color = color;
+            Gizmos.DrawCube(center, size);
+        }
+    }
+
+
 
     [Serializable]
     public class Header
@@ -367,5 +449,12 @@ public class OpcReader : MonoBehaviour
         public int index;
 
         public bool IsValid => index >= 0;
+    }
+
+    [Serializable]
+    public struct LoadLeaf
+    {
+        public int leafIndex;
+        public int lod;
     }
 }
