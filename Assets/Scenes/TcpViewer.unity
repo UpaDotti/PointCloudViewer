@@ -269,10 +269,12 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 32519042763eec04b81632552dddf182, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
-  _filePath: Assets/sample_mini.opc
+  _filePath: Assets/sample.opc
   _maxPointsPerPixel: 1
-  _isDrawVisibleLeafGizmos: 0
-  _isDrawCoseLeafLodGizmos: 1
+  _unloadDelayFrames: 30
+  _drawVisibleGizmos: 0
+  _drawLodGizmos: 0
+  _drawStreamingGizmos: 0
 --- !u!4 &1022487359
 Transform:
   m_ObjectHideFlags: 0
