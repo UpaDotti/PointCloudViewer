@@ -2,13 +2,22 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Xml;
 using UnityEngine;
+using UnityEngine.Rendering;
+using static Unity.Burst.Intrinsics.X86.Avx;
 
 public class OpcReader : MonoBehaviour
 {
     [Header("Setting")]
     [SerializeField]
     private string _filePath = "Assets/sample.opc";
+
+    [SerializeField]
+    private Material _pointMaterial;
+
+    [SerializeField]
+    private float _pointSize = 1.0f;
 
     [SerializeField]
     private float _maxPointsPerPixel = 1.0f;
@@ -39,6 +48,9 @@ public class OpcReader : MonoBehaviour
     private Queue<int> _branchIndicesToCheck = new Queue<int>();
     private List<LoadLeaf> _loadLeafs = new List<LoadLeaf>();
     private List<LeafState> _leafStates = new List<LeafState>();
+    private GraphicsBuffer _quadIndex;
+    private MaterialPropertyBlock _mpb;
+    private RenderParams _rp;
 
 
 
@@ -53,6 +65,7 @@ public class OpcReader : MonoBehaviour
         _rootBranchIndex = GetRootBranchIndex(_branches);
         BuildReference(_branches, _leaves);
         _leafStates = CreateLeafStates(_leaves);
+        SetupRendering();
     }
 
     private BinaryReader OpenFile(string filePath)
@@ -226,6 +239,24 @@ public class OpcReader : MonoBehaviour
         return leafStates;
     }
 
+    private void SetupRendering()
+    {
+        _rp = new RenderParams(_pointMaterial)
+        {
+            shadowCastingMode = ShadowCastingMode.Off,
+            receiveShadows = false,
+            lightProbeUsage = LightProbeUsage.Off,
+            reflectionProbeUsage = ReflectionProbeUsage.Off,
+            motionVectorMode = MotionVectorGenerationMode.ForceNoMotion,
+        };
+
+        _mpb = new MaterialPropertyBlock();
+
+        uint[] index = { 0u, 1u, 2u, 2u, 1u, 3u };
+        _quadIndex = new GraphicsBuffer(GraphicsBuffer.Target.Index, index.Length, sizeof(uint));
+        _quadIndex.SetData(index);
+    }
+
 
 
     private void Update()
@@ -238,6 +269,9 @@ public class OpcReader : MonoBehaviour
 
         // 点群データをロード・アンロード
         SyncLeafStreaming();
+
+        // 点群を描画
+        DrawPointCloud();
     }
 
     private void GetVisibleLeafIndices()
@@ -422,6 +456,7 @@ public class OpcReader : MonoBehaviour
         args[0].baseVertexIndex = 0u;
         state.indirectArgs.SetData(args);
 
+        state.bounds = leaf.bounds;
         state.loadedLod = lod;
     }
 
@@ -436,6 +471,33 @@ public class OpcReader : MonoBehaviour
         state.indirectArgs = null;
 
         state.loadedLod = -1;
+    }
+
+    private void DrawPointCloud()
+    {
+        foreach (var leafState in _leafStates)
+        {
+            if (leafState.loadedLod == -1) continue;
+            if (leafState.pointBuffer == null || leafState.indirectArgs == null) continue;
+
+            _mpb.Clear();
+            _mpb.SetBuffer("_Points", leafState.pointBuffer);
+            _mpb.SetVector("_ChunkMin", leafState.bounds.min);
+            _mpb.SetVector("_ChunkMax", leafState.bounds.max);
+            _mpb.SetFloat("_PointSize", _pointSize);
+
+            _rp.matProps = _mpb;
+            _rp.worldBounds = leafState.bounds;
+
+            Graphics.RenderPrimitivesIndexedIndirect(
+                _rp,
+                MeshTopology.Triangles,
+                _quadIndex,
+                leafState.indirectArgs,
+                1,
+                0
+            );
+        }
     }
 
 
@@ -453,6 +515,7 @@ public class OpcReader : MonoBehaviour
     private void Cleanup()
     {
         UnloadAllLeaves();
+        UnloadIndexBuffer();
         CloseReader();
     }
 
@@ -472,6 +535,12 @@ public class OpcReader : MonoBehaviour
             _reader.Dispose();
             _reader = null;
         }
+    }
+
+    private void UnloadIndexBuffer()
+    {
+        _quadIndex?.Dispose();
+        _quadIndex = null;
     }
 
 
@@ -556,6 +625,7 @@ public class OpcReader : MonoBehaviour
     }
 
 
+
     [Serializable]
     public class Header
     {
@@ -625,6 +695,7 @@ public class OpcReader : MonoBehaviour
     {
         public GraphicsBuffer pointBuffer;
         public GraphicsBuffer indirectArgs;
+        public Bounds bounds;
         public int loadedLod = -1;
         public int lastWantedFrame = -1;
     }
