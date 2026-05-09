@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -421,8 +422,11 @@ public class OpcLoader : MonoBehaviour
 
         // 読み込み
         int count = (int)leaf.lodCounts[lod];
-        PackedPoint12[] packed = new PackedPoint12[count];
 
+        // Poolを借りる
+        PackedPoint12[] packed = ArrayPool<PackedPoint12>.Shared.Rent(count);
+
+        // 点データを構築
         for (int i = 0; i < count; i++)
         {
             ushort x16 = _reader.ReadUInt16();
@@ -439,9 +443,12 @@ public class OpcLoader : MonoBehaviour
             packed[i].rgba = (uint)(r8 | (g8 << 8) | (b8 << 16) | (a8 << 24));
         }
 
-        // GPUバッファ作成
+        // GPUバッファ作成（プール配列は余剰領域があるので count 個だけアップロード）
         state.pointBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, 12);
-        state.pointBuffer.SetData(packed);
+        state.pointBuffer.SetData(packed, 0, 0, count);
+
+        // Poolを返す
+        ArrayPool<PackedPoint12>.Shared.Return(packed);
 
         // Indirect args
         state.indirectArgs = new GraphicsBuffer(
