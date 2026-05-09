@@ -5,9 +5,8 @@ using System.Linq;
 using System.Xml;
 using UnityEngine;
 using UnityEngine.Rendering;
-using static Unity.Burst.Intrinsics.X86.Avx;
 
-public class OpcReader : MonoBehaviour
+public class OpcLoader : MonoBehaviour
 {
     [Header("Setting")]
     [SerializeField]
@@ -77,7 +76,7 @@ public class OpcReader : MonoBehaviour
 
     private Header ReadHeader(BinaryReader reader)
     {
-        // OPCƒtƒ@ƒCƒ‹‚©‚ğƒ`ƒFƒbƒN
+        // OPCãƒ•ã‚¡ã‚¤ãƒ«ã®ãƒã‚¸ãƒƒã‚¯ãƒã‚§ãƒƒã‚¯
         byte[] magic = reader.ReadBytes(4);
         byte[] expected = { (byte)'O', (byte)'P', (byte)'C', 0x00 };
         if (!magic.SequenceEqual(expected))
@@ -187,7 +186,7 @@ public class OpcReader : MonoBehaviour
 
     private void BuildReference(List<Branch> branches, List<Leaf> leaves)
     {
-        // ƒpƒX‚ÆƒCƒ“ƒfƒbƒNƒX‚Ì«‘‚ğì¬
+        // ãƒ‘ã‚¹ã¨ã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ã®è¾æ›¸ã‚’ä½œæˆ
         var branchIndexByPath = new Dictionary<ulong, int>(branches.Count);
         var leafIndexByPath = new Dictionary<ulong, int>(leaves.Count);
         for (int i = 0; i < branches.Count; i++)
@@ -199,7 +198,7 @@ public class OpcReader : MonoBehaviour
             leafIndexByPath[leaves[i].path] = i;
         }
 
-        // ŠÖŒW‚ğ\’z
+        // é–¢ä¿‚ã‚’æ§‹ç¯‰
         for (int i = 0; i < branches.Count; i++)
         {
             Branch branch = branches[i];
@@ -261,57 +260,57 @@ public class OpcReader : MonoBehaviour
 
     private void Update()
     {
-        // ‹ŠE‚É“ü‚Á‚Ä‚¢‚é‚©
+        // è¦–ç•Œã«å…¥ã£ã¦ã„ã‚‹ã‹
         GetVisibleLeafIndices();
 
-        // LOD‚ğ‘I‘ğ
+        // LODã‚’é¸æŠ
         ChooseLeafLod();
 
-        // “_ŒQƒf[ƒ^‚ğƒ[ƒhEƒAƒ“ƒ[ƒh
+        // ç‚¹ç¾¤ãƒ‡ãƒ¼ã‚¿ã‚’ãƒ­ãƒ¼ãƒ‰ãƒ»ã‚¢ãƒ³ãƒ­ãƒ¼ãƒ‰
         SyncLeafStreaming();
 
-        // “_ŒQ‚ğ•`‰æ
+        // ç‚¹ç¾¤ã‚’æç”»
         DrawPointCloud();
     }
 
     private void GetVisibleLeafIndices()
     {
-        // ‰Šú‰»
+        // åˆæœŸåŒ–
         _visibleLeafIndices.Clear();
         _branchIndicesToCheck.Clear();
 
-        // ‰Â‹ƒ{ƒbƒNƒX
+        // ã‚«ãƒ¡ãƒ©ã®è¦–éŒå°å¹³é¢
         Plane[] planes = GeometryUtility.CalculateFrustumPlanes(_mainCamera);
 
-        // ƒ‹[ƒgƒuƒ‰ƒ“ƒ`‚ğ’Ç‰Á
+        // ãƒ«ãƒ¼ãƒˆãƒ–ãƒ©ãƒ³ãƒã‚’è¿½åŠ 
         _branchIndicesToCheck.Enqueue(_rootBranchIndex);
 
-        // ”»’èƒ‹[ƒv
+        // æ¢ç´¢ãƒ«ãƒ¼ãƒ—
         while (_branchIndicesToCheck.Count > 0)
         {
-            // ”»’è‘ÎÛ‚Ì}‚ğæ“¾
+            // å‡¦ç†å¯¾è±¡ã®æã‚’å–å¾—
             int branchIndex = _branchIndicesToCheck.Dequeue();
             Branch branch = _branches[branchIndex];
 
-            // }‚ªŒ©‚¦‚Ä‚¢‚é‚©
+            // æãŒè¦‹ãˆã¦ã„ã‚‹ã‹
             if (!GeometryUtility.TestPlanesAABB(planes, branch.bounds))
             {
-                // q‚Ì”»’è‚ğƒXƒLƒbƒv
+                // å­ã®åˆ¤å®šã‚’ã‚¹ã‚­ãƒƒãƒ—
                 continue;
             }
 
-            // Œ©‚¦‚Ä‚¢‚éq‚Ìƒm[ƒh‚ğˆ—
+            // è¦‹ãˆã¦ã„ã‚‹å­ã®ãƒãƒ¼ãƒ‰ã‚’ç¢ºèª
             for (int i = 0; i < branch.references.Length; i++)
             {
                 NodeReference nodeRef = branch.references[i];
 
-                // ‘¶İ‚·‚é‚©
+                // å­˜åœ¨ã—ã¦ã„ã‚‹ã‹
                 if (!nodeRef.IsValid) continue;
 
-                // ƒm[ƒh‚Í—t‚©
+                // ãƒãƒ¼ãƒ‰ã¯è‘‰ã‹
                 if (nodeRef.isLeaf)
                 {
-                    // Œ©‚¦‚éê‡‚Í•Ô‚·ƒŠƒXƒg‚É’Ç‰Á
+                    // è¦‹ãˆã¦ã„ã‚‹å ´åˆã¯è¿”å´ãƒªã‚¹ãƒˆã«è¿½åŠ 
                     Leaf leaf = _leaves[nodeRef.index];
                     if (GeometryUtility.TestPlanesAABB(planes, leaf.bounds))
                     {
@@ -320,7 +319,7 @@ public class OpcReader : MonoBehaviour
                 }
                 else
                 {
-                    // ”»’èˆ—‚Æ‚µ‚Ä’Ç‰Á
+                    // æ¢ç´¢å¯¾è±¡ã¨ã—ã¦è¿½åŠ 
                     _branchIndicesToCheck.Enqueue(nodeRef.index);
                 }
             }
@@ -343,10 +342,10 @@ public class OpcReader : MonoBehaviour
     {
         Bounds bounds = leaf.bounds;
 
-        // Bounds‰~‚Ì”¼Œa‚ğæ“¾
+        // Boundsçƒã®åŠå¾„ã‚’å–å¾—
         float r = bounds.extents.magnitude;
 
-        // Bounds‰~‚Ì”¼Œa‚ğƒsƒNƒZƒ‹”‚Åæ“¾
+        // Boundsçƒã®åŠå¾„ã‚’ãƒ”ã‚¯ã‚»ãƒ«å˜ä½ã§å–å¾—
         Vector3 center = bounds.center;
         Vector3 sc = _mainCamera.WorldToScreenPoint(center);
         Vector3 sx = _mainCamera.WorldToScreenPoint(center + _mainCamera.transform.right * r);
@@ -355,10 +354,10 @@ public class OpcReader : MonoBehaviour
         float rPxY = (sy - sc).magnitude;
         float rPx = Mathf.Max(rPxX, rPxY);
 
-        // Bounds‰~‚Ì–ÊÏ‚ğƒsƒNƒZƒ‹”‚Åæ“¾
+        // Boundsçƒã®é¢ç©ã‚’ãƒ”ã‚¯ã‚»ãƒ«å˜ä½ã§å–å¾—
         float areaPx = Mathf.Max(1f, Mathf.PI * rPx * rPx);
 
-        // è‡’l‚æ‚è’á‚¢ê‡‚ÉLOD‚ğ•Ô‚·
+        // å¯†åº¦ãŒä½ã„å ´åˆã¯LODã‚’è¿”ã™
         for (int i = 0; i < leaf.lodCounts.Length; i++)
         {
             uint count = leaf.lodCounts[i];
@@ -366,7 +365,7 @@ public class OpcReader : MonoBehaviour
             if (density <= _maxPointsPerPixel) return i;
         }
 
-        // Å‚à‘e‚¢LOD‚ğ•Ô‚·
+        // æœ€ã‚‚ç²—ã„LODã‚’è¿”ã™
         return leaf.lodCounts.Length - 1;
     }
 
@@ -374,31 +373,31 @@ public class OpcReader : MonoBehaviour
     {
         int frame = Time.frameCount;
 
-        // ƒ[ƒh
+        // ãƒ­ãƒ¼ãƒ‰
         foreach (var loadLeaf in _loadLeafs)
         {
-            // ‘Î‰‚·‚éLeafState‚ğæ“¾
+            // å¯¾å¿œã™ã‚‹LeafStateã‚’å–å¾—
             LeafState state = _leafStates[loadLeaf.leafIndex];
 
-            // ÅI‚ÌƒtƒŒ[ƒ€‚ğXV
+            // æœ€çµ‚ãƒ•ãƒ¬ãƒ¼ãƒ ã‚’æ›´æ–°
             state.lastWantedFrame = frame;
 
-            // ƒ[ƒh‚µ‚Ä‚¢‚é‚©
+            // ãƒ­ãƒ¼ãƒ‰æ¸ˆã¿ã‹
             if (state.loadedLod == loadLeaf.lod && state.pointBuffer != null && state.indirectArgs != null)
                 continue;
 
             LoadLeafPoints(loadLeaf.leafIndex, loadLeaf.lod);
         }
 
-        // ƒAƒ“ƒ[ƒh
+        // ã‚¢ãƒ³ãƒ­ãƒ¼ãƒ‰
         for (int i = 0; i < _leafStates.Count; i++)
         {
             LeafState stae = _leafStates[i];
 
-            // ƒ[ƒh‚µ‚Ä‚È‚¢‚©
+            // ãƒ­ãƒ¼ãƒ‰ã•ã‚Œã¦ã„ãªã„
             if (stae.loadedLod < 0) continue;
 
-            // w’è‚ÌƒtƒŒ[ƒ€
+            // æŒ‡å®šã®ãƒ•ãƒ¬ãƒ¼ãƒ æ•°ã‚’è¶…ãˆãŸã‹
             if (frame - stae.lastWantedFrame > _unloadDelayFrames)
             {
                 UnloadLeafPoints(i);
@@ -408,7 +407,7 @@ public class OpcReader : MonoBehaviour
 
     private void LoadLeafPoints(int leafIndex, int lod)
     {
-        // ‚·‚Å‚É‚ ‚é‚È‚çƒAƒ“ƒ[ƒhi·‚µ‘Ö‚¦j
+        // ã™ã§ã«ã‚ã‚‹ãªã‚‰ã‚¢ãƒ³ãƒ­ãƒ¼ãƒ‰ï¼ˆå·®ã—æ›¿ãˆï¼‰
         UnloadLeafPoints(leafIndex);
 
         Leaf leaf = _leaves[leafIndex];
@@ -418,7 +417,7 @@ public class OpcReader : MonoBehaviour
         long seekPos = _bodyStart + (long)(leaf.baseOffset * _header.pointStrideBytes);
         _reader.BaseStream.Seek(seekPos, SeekOrigin.Begin);
 
-        // “Ç‚İ‚İ
+        // èª­ã¿è¾¼ã¿
         int count = (int)leaf.lodCounts[lod];
         PackedPoint12[] packed = new PackedPoint12[count];
 
@@ -438,7 +437,7 @@ public class OpcReader : MonoBehaviour
             packed[i].rgba = (uint)(r8 | (g8 << 8) | (b8 << 16) | (a8 << 24));
         }
 
-        // GPUƒoƒbƒtƒ@ì¬
+        // GPUãƒãƒƒãƒ•ã‚¡ä½œæˆ
         state.pointBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, 12);
         state.pointBuffer.SetData(packed);
 
@@ -608,7 +607,7 @@ public class OpcReader : MonoBehaviour
         {
             LeafState state = _leafStates[i];
 
-            // ƒ[ƒh‚µ‚Ä‚È‚¢‚È‚ç•`‚©‚È‚¢
+            // ãƒ­ãƒ¼ãƒ‰ã•ã‚Œã¦ã„ãªã„ãªã‚‰æç”»ã—ãªã„
             if (state.loadedLod < 0) continue;
 
             int ageFrames = 0;
