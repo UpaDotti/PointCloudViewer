@@ -51,6 +51,7 @@ public class OpcLoader : MonoBehaviour
     private MaterialPropertyBlock _mpb;
     private RenderParams _rp;
     private readonly Plane[] _planes = new Plane[6];
+    private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _indirectArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[1];
 
 
 
@@ -449,12 +450,11 @@ public class OpcLoader : MonoBehaviour
             GraphicsBuffer.IndirectDrawIndexedArgs.size
         );
 
-        var args = new GraphicsBuffer.IndirectDrawIndexedArgs[1];
-        args[0].indexCountPerInstance = 6u;
-        args[0].instanceCount = (uint)count;
-        args[0].startIndex = 0u;
-        args[0].baseVertexIndex = 0u;
-        state.indirectArgs.SetData(args);
+        _indirectArgs[0].indexCountPerInstance = 6u;
+        _indirectArgs[0].instanceCount = (uint)count;
+        _indirectArgs[0].startIndex = 0u;
+        _indirectArgs[0].baseVertexIndex = 0u;
+        state.indirectArgs.SetData(_indirectArgs);
 
         state.bounds = leaf.bounds;
         state.loadedLod = lod;
