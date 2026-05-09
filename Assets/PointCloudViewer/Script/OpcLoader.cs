@@ -50,6 +50,7 @@ public class OpcLoader : MonoBehaviour
     private GraphicsBuffer _quadIndex;
     private MaterialPropertyBlock _mpb;
     private RenderParams _rp;
+    private readonly Plane[] _planes = new Plane[6];
 
 
 
@@ -280,7 +281,7 @@ public class OpcLoader : MonoBehaviour
         _branchIndicesToCheck.Clear();
 
         // カメラの視錐台平面
-        Plane[] planes = GeometryUtility.CalculateFrustumPlanes(_mainCamera);
+        GeometryUtility.CalculateFrustumPlanes(_mainCamera, _planes);
 
         // ルートブランチを追加
         _branchIndicesToCheck.Enqueue(_rootBranchIndex);
@@ -293,7 +294,7 @@ public class OpcLoader : MonoBehaviour
             Branch branch = _branches[branchIndex];
 
             // 枝が見えているか
-            if (!GeometryUtility.TestPlanesAABB(planes, branch.bounds))
+            if (!GeometryUtility.TestPlanesAABB(_planes, branch.bounds))
             {
                 // 子の判定をスキップ
                 continue;
@@ -312,7 +313,7 @@ public class OpcLoader : MonoBehaviour
                 {
                     // 見えている場合は返却リストに追加
                     Leaf leaf = _leaves[nodeRef.index];
-                    if (GeometryUtility.TestPlanesAABB(planes, leaf.bounds))
+                    if (GeometryUtility.TestPlanesAABB(_planes, leaf.bounds))
                     {
                         _visibleLeafIndices.Add(nodeRef.index);
                     }
