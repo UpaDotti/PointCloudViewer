@@ -1,4 +1,7 @@
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 /// <summary>
 /// CameraOrbitMover の動きと BenchmarkSession の計測を結びつけるだけの管理クラス。
@@ -14,11 +17,18 @@ public class BenchmarkController : MonoBehaviour
         // Awake は全 Start より先に走るので、ここで購読すれば Started イベントを取り逃さない
         _routeMover.Started += _session.Begin;
         _routeMover.Finished += _session.End;
+        _session.OnFinished += HandleSessionFinished;
     }
 
     private void OnDestroy()
     {
         _routeMover.Started -= _session.Begin;
         _routeMover.Finished -= _session.End;
+        _session.OnFinished -= HandleSessionFinished;
+    }
+
+    private void HandleSessionFinished()
+    {
+        EditorApplication.isPlaying = false;
     }
 }
