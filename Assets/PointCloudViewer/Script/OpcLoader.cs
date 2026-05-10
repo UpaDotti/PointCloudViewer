@@ -417,26 +417,39 @@ public class OpcLoader : MonoBehaviour
         LeafState state = _leafStates[leafIndex];
 
         // Seek
-        long seekPos = _bodyStart + (long)(leaf.baseOffset * _header.pointStrideBytes);
+        int stride = _header.pointStrideBytes;
+        long seekPos = _bodyStart + (long)(leaf.baseOffset * (ulong)stride);
         _reader.BaseStream.Seek(seekPos, SeekOrigin.Begin);
 
-        // 読み込み
+        // 読み込み点数とバイト数
         int count = (int)leaf.lodCounts[lod];
+        int totalBytes = count * stride;
 
-        // Poolを借りる
+        // Poolを借りる（生バイト + パック済み配列）
+        byte[] raw = ArrayPool<byte>.Shared.Rent(totalBytes);
         PackedPoint12[] packed = ArrayPool<PackedPoint12>.Shared.Rent(count);
 
-        // 点データを構築
+        // 1リーフ分をまとめて読み込み
+        int readBytes = 0;
+        while (readBytes < totalBytes)
+        {
+            int n = _reader.BaseStream.Read(raw, readBytes, totalBytes - readBytes);
+            if (n <= 0) break;
+            readBytes += n;
+        }
+
+        // 点データを構築（バイト列からパック）
         for (int i = 0; i < count; i++)
         {
-            ushort x16 = _reader.ReadUInt16();
-            ushort y16 = _reader.ReadUInt16();
-            ushort z16 = _reader.ReadUInt16();
+            int p = i * stride;
+            ushort x16 = (ushort)(raw[p] | (raw[p + 1] << 8));
+            ushort y16 = (ushort)(raw[p + 2] | (raw[p + 3] << 8));
+            ushort z16 = (ushort)(raw[p + 4] | (raw[p + 5] << 8));
 
-            byte r8 = _reader.ReadByte();
-            byte g8 = _reader.ReadByte();
-            byte b8 = _reader.ReadByte();
-            byte a8 = _reader.ReadByte();
+            byte r8 = raw[p + 6];
+            byte g8 = raw[p + 7];
+            byte b8 = raw[p + 8];
+            byte a8 = raw[p + 9];
 
             packed[i].xy = (uint)(x16 | (y16 << 16));
             packed[i].z = (uint)z16;
@@ -449,6 +462,7 @@ public class OpcLoader : MonoBehaviour
 
         // Poolを返す
         ArrayPool<PackedPoint12>.Shared.Return(packed);
+        ArrayPool<byte>.Shared.Return(raw);
 
         // Indirect args
         state.indirectArgs = new GraphicsBuffer(
