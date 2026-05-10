@@ -48,6 +48,7 @@ public class OpcLoader : MonoBehaviour
     private Queue<int> _branchIndicesToCheck = new Queue<int>();
     private List<LoadLeaf> _loadLeafs = new List<LoadLeaf>();
     private List<LeafState> _leafStates = new List<LeafState>();
+    private List<int> _loadedLeafIndices = new List<int>();
     private GraphicsBuffer _quadIndex;
     private MaterialPropertyBlock _mpb;
     private RenderParams _rp;
@@ -392,18 +393,16 @@ public class OpcLoader : MonoBehaviour
             LoadLeafPoints(loadLeaf.leafIndex, loadLeaf.lod);
         }
 
-        // アンロード
-        for (int i = 0; i < _leafStates.Count; i++)
+        // アンロード（後ろから走査: UnloadLeafPoints 内でリストから削除されるため）
+        for (int i = _loadedLeafIndices.Count - 1; i >= 0; i--)
         {
-            LeafState stae = _leafStates[i];
-
-            // ロードされていない
-            if (stae.loadedLod < 0) continue;
+            int leafIndex = _loadedLeafIndices[i];
+            LeafState state = _leafStates[leafIndex];
 
             // 指定のフレーム数を超えたか
-            if (frame - stae.lastWantedFrame > _unloadDelayFrames)
+            if (frame - state.lastWantedFrame > _unloadDelayFrames)
             {
-                UnloadLeafPoints(i);
+                UnloadLeafPoints(leafIndex);
             }
         }
     }
@@ -479,11 +478,17 @@ public class OpcLoader : MonoBehaviour
 
         state.bounds = leaf.bounds;
         state.loadedLod = lod;
+
+        // ロード済みリストに追加
+        _loadedLeafIndices.Add(leafIndex);
     }
 
     private void UnloadLeafPoints(int leafIndex)
     {
         LeafState state = _leafStates[leafIndex];
+
+        // ロード済みでなければ何もしない
+        if (state.loadedLod < 0) return;
 
         state.pointBuffer?.Dispose();
         state.pointBuffer = null;
@@ -492,14 +497,17 @@ public class OpcLoader : MonoBehaviour
         state.indirectArgs = null;
 
         state.loadedLod = -1;
+
+        // ロード済みリストから削除
+        _loadedLeafIndices.Remove(leafIndex);
     }
 
     private void DrawPointCloud()
     {
-        foreach (var leafState in _leafStates)
+        // ロード済みの葉のみ走査
+        foreach (int leafIndex in _loadedLeafIndices)
         {
-            if (leafState.loadedLod == -1) continue;
-            if (leafState.pointBuffer == null || leafState.indirectArgs == null) continue;
+            LeafState leafState = _leafStates[leafIndex];
 
             _mpb.Clear();
             _mpb.SetBuffer("_Points", leafState.pointBuffer);
