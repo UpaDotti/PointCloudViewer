@@ -148,6 +148,8 @@ public class OpcLoader : MonoBehaviour
         {
             var leaf = new Leaf();
 
+            reader.ReadUInt32();
+
             leaf.depth = reader.ReadByte();
             leaf.path = reader.ReadUInt64();
 
