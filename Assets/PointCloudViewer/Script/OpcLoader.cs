@@ -3,7 +3,6 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Xml;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -30,9 +29,6 @@ public class OpcLoader : MonoBehaviour
     private bool _drawVisibleGizmos = false;
 
     [SerializeField]
-    private bool _drawLodGizmos = false;
-
-    [SerializeField]
     private bool _drawStreamingGizmos = false;
 
     [NonSerialized]
@@ -45,10 +41,12 @@ public class OpcLoader : MonoBehaviour
     private int _rootBranchIndex = -1;
     private Camera _mainCamera;
     private List<int> _visibleLeafIndices = new List<int>();
+    private List<int> _visibleBranchIndices = new List<int>();
     private Queue<int> _branchIndicesToCheck = new Queue<int>();
-    private List<LoadLeaf> _loadLeafs = new List<LoadLeaf>();
-    private List<LeafState> _leafStates = new List<LeafState>();
+    private List<NodeState> _leafStates = new List<NodeState>();
+    private List<NodeState> _branchStates = new List<NodeState>();
     private List<int> _loadedLeafIndices = new List<int>();
+    private List<int> _loadedBranchIndices = new List<int>();
     private GraphicsBuffer _quadIndex;
     private MaterialPropertyBlock _mpb;
     private RenderParams _rp;
@@ -67,7 +65,8 @@ public class OpcLoader : MonoBehaviour
         _bodyStart = GetBodyStart();
         _rootBranchIndex = GetRootBranchIndex(_branches);
         BuildReference(_branches, _leaves);
-        _leafStates = CreateLeafStates(_leaves);
+        _leafStates = CreateNodeStates(_leaves.Count);
+        _branchStates = CreateNodeStates(_branches.Count);
         SetupRendering();
     }
 
@@ -100,14 +99,6 @@ public class OpcLoader : MonoBehaviour
         header.rootMin = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
         header.rootMax = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
 
-        // LOD
-        header.lodCount = reader.ReadByte();
-        header.lodSteps = new uint[header.lodCount];
-        for (int i = 0; i < header.lodCount; i++)
-        {
-            header.lodSteps[i] = reader.ReadUInt32();
-        }
-
         // Stats
         header.branchCount = reader.ReadUInt32();
         header.leafCount = reader.ReadUInt32();
@@ -133,6 +124,12 @@ public class OpcLoader : MonoBehaviour
             Vector3 center = (min + max) * 0.5f;
             Vector3 size = max - min;
             branch.bounds = new Bounds(center, size);
+
+            // 代表点の先頭オフセット
+            branch.baseOffset = reader.ReadUInt64();
+
+            // 代表点の点数
+            branch.pointCount = reader.ReadUInt32();
 
             branches.Add(branch);
         }
@@ -161,11 +158,7 @@ public class OpcLoader : MonoBehaviour
 
             leaf.baseOffset = reader.ReadUInt64();
 
-            leaf.lodCounts = new uint[header.lodCount];
-            for (int lod = 0; lod < header.lodCount; lod++)
-            {
-                leaf.lodCounts[lod] = reader.ReadUInt32();
-            }
+            leaf.pointCount = reader.ReadUInt32();
 
             leaves.Add(leaf);
         }
@@ -235,13 +228,13 @@ public class OpcLoader : MonoBehaviour
         }
     }
 
-    private List<LeafState> CreateLeafStates(List<Leaf> leaves)
+    private List<NodeState> CreateNodeStates(int count)
     {
-        var leafStates = new List<LeafState>(leaves.Count);
-        for (int i = 0; i < leaves.Count; i++)
-            leafStates.Add(new LeafState());
+        var states = new List<NodeState>(count);
+        for (int i = 0; i < count; i++)
+            states.Add(new NodeState());
 
-        return leafStates;
+        return states;
     }
 
     private void SetupRendering()
@@ -266,23 +259,21 @@ public class OpcLoader : MonoBehaviour
 
     private void Update()
     {
-        // 視界に入っているか
-        GetVisibleLeafIndices();
-
-        // LODを選択
-        ChooseLeafLod();
+        // 視界に入っているノードを集める（葉 / 代表点で止める枝）
+        GetVisibleNodes();
 
         // 点群データをロード・アンロード
-        SyncLeafStreaming();
+        SyncNodeStreaming();
 
         // 点群を描画
         DrawPointCloud();
     }
 
-    private void GetVisibleLeafIndices()
+    private void GetVisibleNodes()
     {
         // 初期化
         _visibleLeafIndices.Clear();
+        _visibleBranchIndices.Clear();
         _branchIndicesToCheck.Clear();
 
         // カメラの視錐台平面
@@ -302,6 +293,13 @@ public class OpcLoader : MonoBehaviour
             if (!GeometryUtility.TestPlanesAABB(_planes, branch.bounds))
             {
                 // 子の判定をスキップ
+                continue;
+            }
+
+            // 枝の代表点で十分なら止める（子に降りない）
+            if (CanStopAtBranch(branch))
+            {
+                _visibleBranchIndices.Add(branchIndex);
                 continue;
             }
 
@@ -332,22 +330,8 @@ public class OpcLoader : MonoBehaviour
         }
     }
 
-    private void ChooseLeafLod()
+    private float ComputeAreaPx(Bounds bounds)
     {
-        _loadLeafs.Clear();
-
-        foreach (int leafIndex in _visibleLeafIndices)
-        {
-            int lod = ChooseLod(_leaves[leafIndex]);
-            var loadLeaf = new LoadLeaf { leafIndex = leafIndex, lod = lod };
-            _loadLeafs.Add(loadLeaf);
-        }
-    }
-
-    private int ChooseLod(Leaf leaf)
-    {
-        Bounds bounds = leaf.bounds;
-
         // Bounds球の半径を取得
         float r = bounds.extents.magnitude;
 
@@ -360,77 +344,121 @@ public class OpcLoader : MonoBehaviour
         float rPxY = (sy - sc).magnitude;
         float rPx = Mathf.Max(rPxX, rPxY);
 
-        // Bounds球の面積をピクセル単位で取得
-        float areaPx = Mathf.Max(1f, Mathf.PI * rPx * rPx);
-
-        // 密度が低い場合はLODを返す
-        for (int i = 0; i < leaf.lodCounts.Length; i++)
-        {
-            uint count = leaf.lodCounts[i];
-            float density = count / areaPx;
-            if (density <= _maxPointsPerPixel) return i;
-        }
-
-        // 最も粗いLODを返す
-        return leaf.lodCounts.Length - 1;
+        // Bounds球の面積（ピクセル単位）
+        return Mathf.Max(1f, Mathf.PI * rPx * rPx);
     }
 
-    private void SyncLeafStreaming()
+    private bool CanStopAtBranch(Branch branch)
+    {
+        // 代表点が無い枝は止められない
+        if (branch.pointCount == 0) return false;
+
+        // 画面ピクセル面積
+        float areaPx = ComputeAreaPx(branch.bounds);
+
+        // 画面に必要な点数（面積 × 1ピクセル当たりの目標点数）
+        float requiredCount = areaPx * _maxPointsPerPixel;
+
+        // 枝の代表点が必要点数を満たすなら、葉に降りなくてよい
+        return branch.pointCount >= requiredCount;
+    }
+
+    private void SyncNodeStreaming()
     {
         int frame = Time.frameCount;
 
-        // ロード
-        foreach (var loadLeaf in _loadLeafs)
+        // Leaf ロード
+        foreach (int leafIndex in _visibleLeafIndices)
         {
-            // 対応するLeafStateを取得
-            LeafState state = _leafStates[loadLeaf.leafIndex];
-
-            // 最終フレームを更新
+            NodeState state = _leafStates[leafIndex];
             state.lastWantedFrame = frame;
 
-            // ロード済みか
-            if (state.loadedLod == loadLeaf.lod && state.pointBuffer != null && state.indirectArgs != null)
-                continue;
+            // すでにロード済みなら何もしない
+            if (state.isLoaded) continue;
 
-            LoadLeafPoints(loadLeaf.leafIndex, loadLeaf.lod);
+            LoadLeafPoints(leafIndex);
         }
 
-        // アンロード（後ろから走査: UnloadLeafPoints 内でリストから削除されるため）
+        // Branch ロード
+        foreach (int branchIndex in _visibleBranchIndices)
+        {
+            NodeState state = _branchStates[branchIndex];
+            state.lastWantedFrame = frame;
+
+            // すでにロード済みなら何もしない
+            if (state.isLoaded) continue;
+
+            LoadBranchPoints(branchIndex);
+        }
+
+        // Leaf アンロード（後ろから走査: 内部でリストから削除されるため）
         for (int i = _loadedLeafIndices.Count - 1; i >= 0; i--)
         {
             int leafIndex = _loadedLeafIndices[i];
-            LeafState state = _leafStates[leafIndex];
+            NodeState state = _leafStates[leafIndex];
 
-            // 指定のフレーム数を超えたか
             if (frame - state.lastWantedFrame > _unloadDelayFrames)
             {
                 UnloadLeafPoints(leafIndex);
             }
         }
+
+        // Branch アンロード
+        for (int i = _loadedBranchIndices.Count - 1; i >= 0; i--)
+        {
+            int branchIndex = _loadedBranchIndices[i];
+            NodeState state = _branchStates[branchIndex];
+
+            if (frame - state.lastWantedFrame > _unloadDelayFrames)
+            {
+                UnloadBranchPoints(branchIndex);
+            }
+        }
     }
 
-    private void LoadLeafPoints(int leafIndex, int lod)
+    private void LoadLeafPoints(int leafIndex)
     {
-        // すでにあるならアンロード（差し替え）
-        UnloadLeafPoints(leafIndex);
-
         Leaf leaf = _leaves[leafIndex];
-        LeafState state = _leafStates[leafIndex];
+        NodeState state = _leafStates[leafIndex];
 
+        // 点数を取得してGPUバッファを構築
+        int count = (int)leaf.pointCount;
+        FillNodeBuffers(state, leaf.baseOffset, count, leaf.bounds);
+        state.isLoaded = true;
+
+        // ロード済みリストに追加
+        _loadedLeafIndices.Add(leafIndex);
+    }
+
+    private void LoadBranchPoints(int branchIndex)
+    {
+        Branch branch = _branches[branchIndex];
+        NodeState state = _branchStates[branchIndex];
+
+        // 点数を取得してGPUバッファを構築
+        int count = (int)branch.pointCount;
+        FillNodeBuffers(state, branch.baseOffset, count, branch.bounds);
+        state.isLoaded = true;
+
+        // ロード済みリストに追加
+        _loadedBranchIndices.Add(branchIndex);
+    }
+
+    private void FillNodeBuffers(NodeState state, ulong baseOffset, int count, Bounds bounds)
+    {
         // Seek
         int stride = _header.pointStrideBytes;
-        long seekPos = _bodyStart + (long)(leaf.baseOffset * (ulong)stride);
+        long seekPos = _bodyStart + (long)(baseOffset * (ulong)stride);
         _reader.BaseStream.Seek(seekPos, SeekOrigin.Begin);
 
-        // 読み込み点数とバイト数
-        int count = (int)leaf.lodCounts[lod];
+        // 読み込みバイト数
         int totalBytes = count * stride;
 
         // Poolを借りる（生バイト + パック済み配列）
         byte[] raw = ArrayPool<byte>.Shared.Rent(totalBytes);
         PackedPoint12[] packed = ArrayPool<PackedPoint12>.Shared.Rent(count);
 
-        // 1リーフ分をまとめて読み込み
+        // 1ノード分をまとめて読み込み
         int readBytes = 0;
         while (readBytes < totalBytes)
         {
@@ -478,57 +506,80 @@ public class OpcLoader : MonoBehaviour
         _indirectArgs[0].baseVertexIndex = 0u;
         state.indirectArgs.SetData(_indirectArgs);
 
-        state.bounds = leaf.bounds;
-        state.loadedLod = lod;
-
-        // ロード済みリストに追加
-        _loadedLeafIndices.Add(leafIndex);
+        state.bounds = bounds;
     }
 
     private void UnloadLeafPoints(int leafIndex)
     {
-        LeafState state = _leafStates[leafIndex];
+        NodeState state = _leafStates[leafIndex];
 
         // ロード済みでなければ何もしない
-        if (state.loadedLod < 0) return;
+        if (!state.isLoaded) return;
 
+        DisposeNodeBuffers(state);
+
+        // ロード済みリストから削除
+        _loadedLeafIndices.Remove(leafIndex);
+    }
+
+    private void UnloadBranchPoints(int branchIndex)
+    {
+        NodeState state = _branchStates[branchIndex];
+
+        // ロード済みでなければ何もしない
+        if (!state.isLoaded) return;
+
+        DisposeNodeBuffers(state);
+
+        // ロード済みリストから削除
+        _loadedBranchIndices.Remove(branchIndex);
+    }
+
+    private void DisposeNodeBuffers(NodeState state)
+    {
         state.pointBuffer?.Dispose();
         state.pointBuffer = null;
 
         state.indirectArgs?.Dispose();
         state.indirectArgs = null;
 
-        state.loadedLod = -1;
-
-        // ロード済みリストから削除
-        _loadedLeafIndices.Remove(leafIndex);
+        state.isLoaded = false;
     }
 
     private void DrawPointCloud()
     {
-        // ロード済みの葉のみ走査
+        // ロード済みの葉を描画
         foreach (int leafIndex in _loadedLeafIndices)
         {
-            LeafState leafState = _leafStates[leafIndex];
-
-            _mpb.Clear();
-            _mpb.SetBuffer("_Points", leafState.pointBuffer);
-            _mpb.SetVector("_ChunkMin", leafState.bounds.min);
-            _mpb.SetVector("_ChunkMax", leafState.bounds.max);
-            _mpb.SetFloat("_PointSize", _pointSize);
-
-            _rp.matProps = _mpb;
-            _rp.worldBounds = leafState.bounds;
-
-            Graphics.RenderPrimitivesIndexedIndirect(
-                _rp,
-                MeshTopology.Triangles,
-                _quadIndex,
-                leafState.indirectArgs,
-                1,
-                0
-            );
+            DrawNode(_leafStates[leafIndex]);
         }
+
+        // ロード済みの枝代表点を描画
+        foreach (int branchIndex in _loadedBranchIndices)
+        {
+            DrawNode(_branchStates[branchIndex]);
+        }
+    }
+
+    private void DrawNode(NodeState state)
+    {
+        _mpb.Clear();
+        _mpb.SetBuffer("_Points", state.pointBuffer);
+        _mpb.SetVector("_ChunkMin", state.bounds.min);
+        _mpb.SetVector("_ChunkMax", state.bounds.max);
+        _mpb.SetFloat("_PointSize", _pointSize);
+
+        _rp.matProps = _mpb;
+        _rp.worldBounds = state.bounds;
+
+        Graphics.RenderPrimitivesIndexedIndirect(
+            _rp,
+            MeshTopology.Triangles,
+            _quadIndex,
+            state.indirectArgs,
+            1,
+            0
+        );
     }
 
 
@@ -545,16 +596,20 @@ public class OpcLoader : MonoBehaviour
 
     private void Cleanup()
     {
-        UnloadAllLeaves();
+        UnloadAllNodes();
         UnloadIndexBuffer();
         CloseReader();
     }
 
-    private void UnloadAllLeaves()
+    private void UnloadAllNodes()
     {
         for (int i = 0; i < _leafStates.Count; i++)
         {
             UnloadLeafPoints(i);
+        }
+        for (int i = 0; i < _branchStates.Count; i++)
+        {
+            UnloadBranchPoints(i);
         }
     }
 
@@ -579,7 +634,6 @@ public class OpcLoader : MonoBehaviour
     private void OnDrawGizmos()
     {
         DrawVisibleGizmos();
-        DrawLodGizmos();
         DrawStreamingGizmos();
     }
 
@@ -605,29 +659,6 @@ public class OpcLoader : MonoBehaviour
         }
     }
 
-    private void DrawLodGizmos()
-    {
-        if (!_drawLodGizmos) return;
-
-        foreach (var loadLeaf in _loadLeafs)
-        {
-            Leaf leaf = _leaves[loadLeaf.leafIndex];
-
-            Vector3 center = leaf.bounds.center;
-            Vector3 size = leaf.bounds.size;
-
-            int maxLodIndex = _header.lodCount - 1;
-            float t = (maxLodIndex == 0) ? 0f : (loadLeaf.lod / (float)maxLodIndex);
-
-            Color color = Color.HSVToRGB(t, 1f, 1f);
-
-            color.a = 0.7f;
-
-            Gizmos.color = color;
-            Gizmos.DrawCube(center, size);
-        }
-    }
-
     private void DrawStreamingGizmos()
     {
         if (!_drawStreamingGizmos) return;
@@ -637,10 +668,10 @@ public class OpcLoader : MonoBehaviour
 
         for (int i = 0; i < _leafStates.Count; i++)
         {
-            LeafState state = _leafStates[i];
+            NodeState state = _leafStates[i];
 
             // ロードされていないなら描画しない
-            if (state.loadedLod < 0) continue;
+            if (!state.isLoaded) continue;
 
             int ageFrames = 0;
             if (state.lastWantedFrame >= 0) ageFrames = frame - state.lastWantedFrame;
@@ -670,10 +701,6 @@ public class OpcLoader : MonoBehaviour
         public Vector3 rootMin;
         public Vector3 rootMax;
 
-        [Header("LOD")]
-        public byte lodCount;
-        public uint[] lodSteps;
-
         [Header("Status")]
         public uint leafCount;
         public uint branchCount;
@@ -689,6 +716,10 @@ public class OpcLoader : MonoBehaviour
 
         public Bounds bounds;
 
+        // 枝の代表点用
+        public ulong baseOffset;
+        public uint pointCount;
+
         public NodeReference[] references = new NodeReference[8];
     }
 
@@ -702,7 +733,7 @@ public class OpcLoader : MonoBehaviour
 
         public ulong baseOffset;
 
-        public uint[] lodCounts;
+        public uint pointCount;
     }
 
     [Serializable]
@@ -715,19 +746,12 @@ public class OpcLoader : MonoBehaviour
         public bool IsValid => index >= 0;
     }
 
-    [Serializable]
-    public struct LoadLeaf
-    {
-        public int leafIndex;
-        public int lod;
-    }
-
-    private class LeafState
+    private class NodeState
     {
         public GraphicsBuffer pointBuffer;
         public GraphicsBuffer indirectArgs;
         public Bounds bounds;
-        public int loadedLod = -1;
+        public bool isLoaded = false;
         public int lastWantedFrame = -1;
     }
 
