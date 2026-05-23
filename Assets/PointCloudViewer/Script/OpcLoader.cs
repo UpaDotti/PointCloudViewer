@@ -8,10 +8,11 @@ using UnityEngine.Rendering;
 
 public class OpcLoader : MonoBehaviour
 {
-    [Header("Setting")]
+    [Header("File")]
     [SerializeField]
     private string _filePath = "Assets/sample.opc";
 
+    [Header("Rendering")]
     [SerializeField]
     private Material _pointMaterial;
 
@@ -21,6 +22,7 @@ public class OpcLoader : MonoBehaviour
     [SerializeField]
     private float _maxPointSize = 8.0f;
 
+    [Header("LOD / Streaming")]
     [SerializeField]
     private float _maxPointsPerPixel = 1.0f;
 
