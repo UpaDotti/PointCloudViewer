@@ -28,6 +28,9 @@ public class OpcLoader : MonoBehaviour
     private int _pointBudget = 2_000_000;
 
     [SerializeField]
+    private bool _autoTune = true;
+
+    [SerializeField]
     private int _unloadDelayFrames = 30;
 
     [Header("Debug")]
@@ -53,6 +56,8 @@ public class OpcLoader : MonoBehaviour
     private List<int> _visibleBranchIndices = new List<int>();
     private List<VisibleNode> _visibleNodes = new List<VisibleNode>();
     private List<uint> _desiredCounts = new List<uint>();
+    private List<uint> _finalAllocs = new List<uint>();
+    private List<int> _activeIndices = new List<int>();
     private Queue<int> _branchIndicesToCheck = new Queue<int>();
     private List<NodeState> _leafStates = new List<NodeState>();
     private List<NodeState> _branchStates = new List<NodeState>();
@@ -389,86 +394,167 @@ public class OpcLoader : MonoBehaviour
 
     private void ApplyPointBudget()
     {
-        // 描画対象リスト / 希望点数バッファを初期化
+        // 描画対象リスト / 各種バッファを初期化
         _visibleLeafIndices.Clear();
         _visibleBranchIndices.Clear();
         _desiredCounts.Clear();
+        _finalAllocs.Clear();
+        _activeIndices.Clear();
 
-        // 1パス目: 各ノードの希望描画点数を計算し、合計を求める
-        long totalDesired = 0;
+        // visibleが無ければ何もしない
+        if (_visibleNodes.Count == 0) return;
+
+        // maxPointsPerPixel を自動算出（手動モードなら設定値を使用）
+        float maxPPP = ComputeMaxPointsPerPixel();
+
+        // 1パス目: 各ノードの希望点数を計算（pointCountキャップは water-filling 内で適用）
+        long totalWish = 0;
         for (int i = 0; i < _visibleNodes.Count; i++)
         {
             VisibleNode node = _visibleNodes[i];
 
-            // 画面サイズに比例した希望点数（最低1点 / ノードの実点数を上限）
-            float wish = Mathf.Max(1f, node.areaPx * _maxPointsPerPixel);
-            uint desired = (uint)Mathf.Min(wish, node.pointCount);
+            // 画面サイズに比例した希望点数（最低1点）
+            uint wish = (uint)Mathf.Max(1f, node.areaPx * maxPPP);
 
-            _desiredCounts.Add(desired);
-            totalDesired += desired;
+            _desiredCounts.Add(wish);
+            _finalAllocs.Add(0);
+            _activeIndices.Add(i);
+            totalWish += wish;
         }
 
-        // 希望合計がBudgetを超えていれば全体を縮小して点数を抑える
-        float scale = 1f;
-        if (totalDesired > _pointBudget && totalDesired > 0)
-        {
-            scale = (float)_pointBudget / totalDesired;
-        }
+        // 2パス目: water-filling で予算を配分
+        AllocateWithWaterFilling();
 
-        // 2パス目: スケール適用後の描画点数をNodeStateに反映
+        // 3パス目: 配分結果を NodeState に反映
         for (int i = 0; i < _visibleNodes.Count; i++)
         {
             VisibleNode node = _visibleNodes[i];
-            uint desired = _desiredCounts[i];
 
-            // スケール適用 / 最低1点を保証 / 実点数を上限
-            uint scaled = (uint)Mathf.Max(1, Mathf.RoundToInt(desired * scale));
-            if (scaled > node.pointCount) scaled = node.pointCount;
+            // 実点数を上限としてクランプ
+            uint alloc = _finalAllocs[i];
+            if (alloc > node.pointCount) alloc = node.pointCount;
 
             // 種別ごとにNodeStateへ反映し描画対象リストに追加
             if (node.isLeaf)
             {
-                _leafStates[node.index].drawCount = scaled;
+                _leafStates[node.index].drawCount = alloc;
                 _leafStates[node.index].areaPx = node.areaPx;
                 _visibleLeafIndices.Add(node.index);
             }
             else
             {
-                _branchStates[node.index].drawCount = scaled;
+                _branchStates[node.index].drawCount = alloc;
                 _branchStates[node.index].areaPx = node.areaPx;
                 _visibleBranchIndices.Add(node.index);
             }
         }
 
         // Budget配分の状況をログ出力
-        if (_logBudget) LogBudgetStats(totalDesired, scale);
+        if (_logBudget) LogBudgetStats(totalWish);
     }
 
-    private void LogBudgetStats(long totalDesired, float scale)
+    private float ComputeMaxPointsPerPixel()
     {
-        // 飽和ノード（desired == pointCount）の集計
+        // 自動チューニングOFFなら手動設定値を使用
+        if (!_autoTune) return _maxPointsPerPixel;
+
+        // visible ノードのピクセル面積を合計
+        float totalAreaPx = 0f;
+        for (int i = 0; i < _visibleNodes.Count; i++)
+            totalAreaPx += _visibleNodes[i].areaPx;
+
+        // 面積ゼロのフェールセーフ
+        if (totalAreaPx <= 0f) return _maxPointsPerPixel;
+
+        // Budget / 総面積で「画面に対するピクセル密度」を逆算（暴走防止のためクランプ）
+        float maxPPP = _pointBudget / totalAreaPx;
+        return Mathf.Clamp(maxPPP, 0.1f, 4.0f);
+    }
+
+    private void AllocateWithWaterFilling()
+    {
+        long remaining = _pointBudget;
+
+        // 飽和ノードを順次確定させ、残予算を非飽和ノードに再配分するループ
+        while (_activeIndices.Count > 0)
+        {
+            // 活性ノードの希望合計を集計
+            long activeWish = 0;
+            for (int j = 0; j < _activeIndices.Count; j++)
+                activeWish += _desiredCounts[_activeIndices[j]];
+
+            // 残予算で全希望を満たせるなら確定して終了
+            if (activeWish <= remaining)
+            {
+                for (int j = 0; j < _activeIndices.Count; j++)
+                {
+                    int idx = _activeIndices[j];
+                    uint pc = _visibleNodes[idx].pointCount;
+                    uint wish = _desiredCounts[idx];
+                    _finalAllocs[idx] = wish < pc ? wish : pc;
+                }
+                _activeIndices.Clear();
+                break;
+            }
+
+            // 一律スケールを計算
+            double scale = (double)remaining / activeWish;
+
+            // pointCount で頭打ちになるノードを確定 → 残予算から引いて活性から外す
+            bool anyCapped = false;
+            for (int j = _activeIndices.Count - 1; j >= 0; j--)
+            {
+                int idx = _activeIndices[j];
+                uint pc = _visibleNodes[idx].pointCount;
+                double scaled = _desiredCounts[idx] * scale;
+                if (scaled >= pc)
+                {
+                    _finalAllocs[idx] = pc;
+                    remaining -= pc;
+                    _activeIndices.RemoveAt(j);
+                    anyCapped = true;
+                }
+            }
+
+            // 誰も新たに飽和しなければスケールを確定して終了
+            if (!anyCapped)
+            {
+                for (int j = 0; j < _activeIndices.Count; j++)
+                {
+                    int idx = _activeIndices[j];
+                    uint scaled = (uint)Mathf.Max(1, Mathf.RoundToInt(_desiredCounts[idx] * (float)scale));
+                    _finalAllocs[idx] = scaled;
+                }
+                _activeIndices.Clear();
+                break;
+            }
+        }
+    }
+
+    private void LogBudgetStats(long totalWish)
+    {
+        // 描画点数 / 飽和ノードの集計
         int saturatedCount = 0;
-        long saturatedDesired = 0;
-        long saturatedScaled = 0;
+        long totalDrawn = 0;
+        long saturatedDrawn = 0;
         for (int i = 0; i < _visibleNodes.Count; i++)
         {
             VisibleNode node = _visibleNodes[i];
-            uint desired = _desiredCounts[i];
-            if (desired != node.pointCount) continue;
+            uint alloc = _finalAllocs[i];
+            if (alloc > node.pointCount) alloc = node.pointCount;
 
-            saturatedCount++;
-            saturatedDesired += desired;
-            saturatedScaled += (uint)Mathf.Max(1, Mathf.RoundToInt(desired * scale));
+            totalDrawn += alloc;
+            if (alloc == node.pointCount)
+            {
+                saturatedCount++;
+                saturatedDrawn += alloc;
+            }
         }
-
-        // 飽和ノードで失われた描画点数（水位充填で取り戻せる上限の目安）
-        long lostBySaturation = saturatedDesired - saturatedScaled;
 
         Debug.Log(
             $"[Budget] visible={_visibleNodes.Count} " +
-            $"totalDesired={totalDesired} budget={_pointBudget} scale={scale:F3} | " +
-            $"saturated={saturatedCount} sat.desired={saturatedDesired} sat.scaled={saturatedScaled} " +
-            $"recoverable≈{lostBySaturation}"
+            $"wish={totalWish} budget={_pointBudget} drawn={totalDrawn} | " +
+            $"saturated={saturatedCount} sat.drawn={saturatedDrawn}"
         );
     }
 
