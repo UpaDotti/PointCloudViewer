@@ -19,6 +19,9 @@ public class OpcLoader : MonoBehaviour
     private float _pointSize = 1.0f;
 
     [SerializeField]
+    private float _maxPointSize = 8.0f;
+
+    [SerializeField]
     private float _maxPointsPerPixel = 1.0f;
 
     [SerializeField]
@@ -33,6 +36,9 @@ public class OpcLoader : MonoBehaviour
 
     [SerializeField]
     private bool _drawStreamingGizmos = false;
+
+    [SerializeField]
+    private bool _logBudget = false;
 
     [NonSerialized]
     private BinaryReader _reader;
@@ -423,14 +429,47 @@ public class OpcLoader : MonoBehaviour
             if (node.isLeaf)
             {
                 _leafStates[node.index].drawCount = scaled;
+                _leafStates[node.index].areaPx = node.areaPx;
                 _visibleLeafIndices.Add(node.index);
             }
             else
             {
                 _branchStates[node.index].drawCount = scaled;
+                _branchStates[node.index].areaPx = node.areaPx;
                 _visibleBranchIndices.Add(node.index);
             }
         }
+
+        // Budget配分の状況をログ出力
+        if (_logBudget) LogBudgetStats(totalDesired, scale);
+    }
+
+    private void LogBudgetStats(long totalDesired, float scale)
+    {
+        // 飽和ノード（desired == pointCount）の集計
+        int saturatedCount = 0;
+        long saturatedDesired = 0;
+        long saturatedScaled = 0;
+        for (int i = 0; i < _visibleNodes.Count; i++)
+        {
+            VisibleNode node = _visibleNodes[i];
+            uint desired = _desiredCounts[i];
+            if (desired != node.pointCount) continue;
+
+            saturatedCount++;
+            saturatedDesired += desired;
+            saturatedScaled += (uint)Mathf.Max(1, Mathf.RoundToInt(desired * scale));
+        }
+
+        // 飽和ノードで失われた描画点数（水位充填で取り戻せる上限の目安）
+        long lostBySaturation = saturatedDesired - saturatedScaled;
+
+        Debug.Log(
+            $"[Budget] visible={_visibleNodes.Count} " +
+            $"totalDesired={totalDesired} budget={_pointBudget} scale={scale:F3} | " +
+            $"saturated={saturatedCount} sat.desired={saturatedDesired} sat.scaled={saturatedScaled} " +
+            $"recoverable≈{lostBySaturation}"
+        );
     }
 
     private bool CanStopAtBranch(Branch branch)
@@ -658,11 +697,14 @@ public class OpcLoader : MonoBehaviour
         _indirectArgs[0].baseVertexIndex = 0u;
         state.indirectArgs.SetData(_indirectArgs);
 
+        // ノードの密度に応じて点サイズを拡大（疎なノードほど大きく描いて穴を埋める）
+        float adaptiveSize = ComputeAdaptivePointSize(state);
+
         _mpb.Clear();
         _mpb.SetBuffer("_Points", state.pointBuffer);
         _mpb.SetVector("_ChunkMin", state.bounds.min);
         _mpb.SetVector("_ChunkMax", state.bounds.max);
-        _mpb.SetFloat("_PointSize", _pointSize);
+        _mpb.SetFloat("_PointSize", adaptiveSize);
 
         _rp.matProps = _mpb;
         _rp.worldBounds = state.bounds;
@@ -675,6 +717,19 @@ public class OpcLoader : MonoBehaviour
             1,
             0
         );
+    }
+
+    private float ComputeAdaptivePointSize(NodeState state)
+    {
+        // 描画点数 / 面積が不明なときは設定値をそのまま使う
+        if (state.drawCount == 0 || state.areaPx <= 0f) return _pointSize;
+
+        // 1点が覆うべき半径（正方格子で隣接接触する想定）
+        float densityRadius = Mathf.Sqrt(state.areaPx / state.drawCount) * 0.5f;
+
+        // 設定値を最低保証、_maxPointSize を上限として密度に応じて拡大
+        float size = Mathf.Max(_pointSize, densityRadius);
+        return Mathf.Min(size, _maxPointSize);
     }
 
 
@@ -851,6 +906,9 @@ public class OpcLoader : MonoBehaviour
 
         // 今フレームで描画する点数（先頭からこの数だけ描画）
         public uint drawCount = 0;
+
+        // 今フレームでノードが画面に占めるピクセル面積（点サイズ計算用）
+        public float areaPx = 0f;
     }
 
     private struct PackedPoint12
