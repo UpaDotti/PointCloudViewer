@@ -22,6 +22,9 @@ public class OpcLoader : MonoBehaviour
     private float _maxPointsPerPixel = 1.0f;
 
     [SerializeField]
+    private int _pointBudget = 2_000_000;
+
+    [SerializeField]
     private int _unloadDelayFrames = 30;
 
     [Header("Debug")]
@@ -42,6 +45,8 @@ public class OpcLoader : MonoBehaviour
     private Camera _mainCamera;
     private List<int> _visibleLeafIndices = new List<int>();
     private List<int> _visibleBranchIndices = new List<int>();
+    private List<VisibleNode> _visibleNodes = new List<VisibleNode>();
+    private List<uint> _desiredCounts = new List<uint>();
     private Queue<int> _branchIndicesToCheck = new Queue<int>();
     private List<NodeState> _leafStates = new List<NodeState>();
     private List<NodeState> _branchStates = new List<NodeState>();
@@ -272,8 +277,7 @@ public class OpcLoader : MonoBehaviour
     private void GetVisibleNodes()
     {
         // 初期化
-        _visibleLeafIndices.Clear();
-        _visibleBranchIndices.Clear();
+        _visibleNodes.Clear();
         _branchIndicesToCheck.Clear();
 
         // カメラの視錐台平面
@@ -299,7 +303,13 @@ public class OpcLoader : MonoBehaviour
             // 枝の代表点で十分なら止める（子に降りない）
             if (CanStopAtBranch(branch))
             {
-                _visibleBranchIndices.Add(branchIndex);
+                _visibleNodes.Add(new VisibleNode
+                {
+                    index = branchIndex,
+                    isLeaf = false,
+                    pointCount = branch.pointCount,
+                    areaPx = ComputeAreaPx(branch.bounds),
+                });
                 continue;
             }
 
@@ -314,11 +324,17 @@ public class OpcLoader : MonoBehaviour
                 // ノードは葉か
                 if (nodeRef.isLeaf)
                 {
-                    // 見えている場合は返却リストに追加
+                    // 見えている場合は候補リストに追加
                     Leaf leaf = _leaves[nodeRef.index];
                     if (GeometryUtility.TestPlanesAABB(_planes, leaf.bounds))
                     {
-                        _visibleLeafIndices.Add(nodeRef.index);
+                        _visibleNodes.Add(new VisibleNode
+                        {
+                            index = nodeRef.index,
+                            isLeaf = true,
+                            pointCount = leaf.pointCount,
+                            areaPx = ComputeAreaPx(leaf.bounds),
+                        });
                     }
                 }
                 else
@@ -328,24 +344,93 @@ public class OpcLoader : MonoBehaviour
                 }
             }
         }
+
+        // Point Budgetを適用して描画対象を決定
+        ApplyPointBudget();
     }
 
     private float ComputeAreaPx(Bounds bounds)
     {
-        // Bounds球の半径を取得
+        // Bounds球の半径 / 中心を取得
         float r = bounds.extents.magnitude;
+        Vector3 center = bounds.center;
+
+        // カメラ前方のクリップ面より手前へクランプし、WorldToScreenPointの異常値を防ぐ
+        Camera cam = _mainCamera;
+        Vector3 camPos = cam.transform.position;
+        Vector3 camFwd = cam.transform.forward;
+        float depth = Vector3.Dot(center - camPos, camFwd);
+        float minDepth = cam.nearClipPlane + 1e-3f;
+        if (depth < minDepth)
+        {
+            // Bounds中心がカメラ背後/直近にある場合は手前位置へずらして安定化
+            center = center + camFwd * (minDepth - depth);
+        }
 
         // Bounds球の半径をピクセル単位で取得
-        Vector3 center = bounds.center;
-        Vector3 sc = _mainCamera.WorldToScreenPoint(center);
-        Vector3 sx = _mainCamera.WorldToScreenPoint(center + _mainCamera.transform.right * r);
-        Vector3 sy = _mainCamera.WorldToScreenPoint(center + _mainCamera.transform.up * r);
+        Vector3 sc = cam.WorldToScreenPoint(center);
+        Vector3 sx = cam.WorldToScreenPoint(center + cam.transform.right * r);
+        Vector3 sy = cam.WorldToScreenPoint(center + cam.transform.up * r);
         float rPxX = (sx - sc).magnitude;
         float rPxY = (sy - sc).magnitude;
         float rPx = Mathf.Max(rPxX, rPxY);
 
-        // Bounds球の面積（ピクセル単位）
-        return Mathf.Max(1f, Mathf.PI * rPx * rPx);
+        // 画面ピクセル数を上限とし、異常値が全体配分を支配しないようにする
+        float maxAreaPx = (float)Screen.width * Screen.height;
+        float areaPx = Mathf.PI * rPx * rPx;
+        return Mathf.Clamp(areaPx, 1f, maxAreaPx);
+    }
+
+    private void ApplyPointBudget()
+    {
+        // 描画対象リスト / 希望点数バッファを初期化
+        _visibleLeafIndices.Clear();
+        _visibleBranchIndices.Clear();
+        _desiredCounts.Clear();
+
+        // 1パス目: 各ノードの希望描画点数を計算し、合計を求める
+        long totalDesired = 0;
+        for (int i = 0; i < _visibleNodes.Count; i++)
+        {
+            VisibleNode node = _visibleNodes[i];
+
+            // 画面サイズに比例した希望点数（最低1点 / ノードの実点数を上限）
+            float wish = Mathf.Max(1f, node.areaPx * _maxPointsPerPixel);
+            uint desired = (uint)Mathf.Min(wish, node.pointCount);
+
+            _desiredCounts.Add(desired);
+            totalDesired += desired;
+        }
+
+        // 希望合計がBudgetを超えていれば全体を縮小して点数を抑える
+        float scale = 1f;
+        if (totalDesired > _pointBudget && totalDesired > 0)
+        {
+            scale = (float)_pointBudget / totalDesired;
+        }
+
+        // 2パス目: スケール適用後の描画点数をNodeStateに反映
+        for (int i = 0; i < _visibleNodes.Count; i++)
+        {
+            VisibleNode node = _visibleNodes[i];
+            uint desired = _desiredCounts[i];
+
+            // スケール適用 / 最低1点を保証 / 実点数を上限
+            uint scaled = (uint)Mathf.Max(1, Mathf.RoundToInt(desired * scale));
+            if (scaled > node.pointCount) scaled = node.pointCount;
+
+            // 種別ごとにNodeStateへ反映し描画対象リストに追加
+            if (node.isLeaf)
+            {
+                _leafStates[node.index].drawCount = scaled;
+                _visibleLeafIndices.Add(node.index);
+            }
+            else
+            {
+                _branchStates[node.index].drawCount = scaled;
+                _visibleBranchIndices.Add(node.index);
+            }
+        }
     }
 
     private bool CanStopAtBranch(Branch branch)
@@ -563,6 +648,16 @@ public class OpcLoader : MonoBehaviour
 
     private void DrawNode(NodeState state)
     {
+        // 描画する点が無ければスキップ
+        if (state.drawCount == 0) return;
+
+        // 今フレームの描画点数で indirectArgs を更新（先頭drawCount点だけ描画される）
+        _indirectArgs[0].indexCountPerInstance = 6u;
+        _indirectArgs[0].instanceCount = state.drawCount;
+        _indirectArgs[0].startIndex = 0u;
+        _indirectArgs[0].baseVertexIndex = 0u;
+        state.indirectArgs.SetData(_indirectArgs);
+
         _mpb.Clear();
         _mpb.SetBuffer("_Points", state.pointBuffer);
         _mpb.SetVector("_ChunkMin", state.bounds.min);
@@ -753,6 +848,9 @@ public class OpcLoader : MonoBehaviour
         public Bounds bounds;
         public bool isLoaded = false;
         public int lastWantedFrame = -1;
+
+        // 今フレームで描画する点数（先頭からこの数だけ描画）
+        public uint drawCount = 0;
     }
 
     private struct PackedPoint12
@@ -760,5 +858,14 @@ public class OpcLoader : MonoBehaviour
         public uint xy;
         public uint z;
         public uint rgba;
+    }
+
+    // Point Budget適用前の候補ノード
+    private struct VisibleNode
+    {
+        public int index;
+        public bool isLeaf;
+        public uint pointCount;
+        public float areaPx;
     }
 }

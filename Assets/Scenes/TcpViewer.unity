@@ -364,9 +364,9 @@ MonoBehaviour:
   _pointMaterial: {fileID: 2100000, guid: 98fc76e6e3a384249b3f5ce8eb3a0793, type: 2}
   _pointSize: 1
   _maxPointsPerPixel: 1
+  _pointBudget: 2000000
   _unloadDelayFrames: 30
   _drawVisibleGizmos: 0
-  _drawLodGizmos: 0
   _drawStreamingGizmos: 0
 --- !u!4 &1022487359
 Transform:
