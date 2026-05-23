@@ -33,16 +33,6 @@ public class OpcLoader : MonoBehaviour
     [SerializeField]
     private int _unloadDelayFrames = 30;
 
-    [Header("Debug")]
-    [SerializeField]
-    private bool _drawVisibleGizmos = false;
-
-    [SerializeField]
-    private bool _drawStreamingGizmos = false;
-
-    [SerializeField]
-    private bool _logBudget = false;
-
     [NonSerialized]
     private BinaryReader _reader;
 
@@ -408,7 +398,6 @@ public class OpcLoader : MonoBehaviour
         float maxPPP = ComputeMaxPointsPerPixel();
 
         // 1パス目: 各ノードの希望点数を計算（pointCountキャップは water-filling 内で適用）
-        long totalWish = 0;
         for (int i = 0; i < _visibleNodes.Count; i++)
         {
             VisibleNode node = _visibleNodes[i];
@@ -419,7 +408,6 @@ public class OpcLoader : MonoBehaviour
             _desiredCounts.Add(wish);
             _finalAllocs.Add(0);
             _activeIndices.Add(i);
-            totalWish += wish;
         }
 
         // 2パス目: water-filling で予算を配分
@@ -448,9 +436,6 @@ public class OpcLoader : MonoBehaviour
                 _visibleBranchIndices.Add(node.index);
             }
         }
-
-        // Budget配分の状況をログ出力
-        if (_logBudget) LogBudgetStats(totalWish);
     }
 
     private float ComputeMaxPointsPerPixel()
@@ -529,33 +514,6 @@ public class OpcLoader : MonoBehaviour
                 break;
             }
         }
-    }
-
-    private void LogBudgetStats(long totalWish)
-    {
-        // 描画点数 / 飽和ノードの集計
-        int saturatedCount = 0;
-        long totalDrawn = 0;
-        long saturatedDrawn = 0;
-        for (int i = 0; i < _visibleNodes.Count; i++)
-        {
-            VisibleNode node = _visibleNodes[i];
-            uint alloc = _finalAllocs[i];
-            if (alloc > node.pointCount) alloc = node.pointCount;
-
-            totalDrawn += alloc;
-            if (alloc == node.pointCount)
-            {
-                saturatedCount++;
-                saturatedDrawn += alloc;
-            }
-        }
-
-        Debug.Log(
-            $"[Budget] visible={_visibleNodes.Count} " +
-            $"wish={totalWish} budget={_pointBudget} drawn={totalDrawn} | " +
-            $"saturated={saturatedCount} sat.drawn={saturatedDrawn}"
-        );
     }
 
     private bool CanStopAtBranch(Branch branch)
@@ -863,63 +821,6 @@ public class OpcLoader : MonoBehaviour
     {
         _quadIndex?.Dispose();
         _quadIndex = null;
-    }
-
-
-
-    private void OnDrawGizmos()
-    {
-        DrawVisibleGizmos();
-        DrawStreamingGizmos();
-    }
-
-    private void DrawVisibleGizmos()
-    {
-        if (!_drawVisibleGizmos) return;
-
-        foreach (int leafIndex in _visibleLeafIndices)
-        {
-            Leaf leaf = _leaves[leafIndex];
-
-            Vector3 center = leaf.bounds.center;
-            Vector3 size = leaf.bounds.size;
-
-            float t = Mathf.InverseLerp(0, 10, leaf.depth);
-
-            Color color = Color.HSVToRGB(t, 1f, 1f);
-
-            color.a = 0.7f;
-
-            Gizmos.color = color;
-            Gizmos.DrawCube(center, size);
-        }
-    }
-
-    private void DrawStreamingGizmos()
-    {
-        if (!_drawStreamingGizmos) return;
-        if (_leaves.Count == 0 || _leafStates.Count != _leaves.Count) return;
-
-        int frame = Time.frameCount;
-
-        for (int i = 0; i < _leafStates.Count; i++)
-        {
-            NodeState state = _leafStates[i];
-
-            // ロードされていないなら描画しない
-            if (!state.isLoaded) continue;
-
-            int ageFrames = 0;
-            if (state.lastWantedFrame >= 0) ageFrames = frame - state.lastWantedFrame;
-
-            float age01 = Mathf.Clamp01(ageFrames / (float)Mathf.Max(1, _unloadDelayFrames));
-
-            Color c = Color.Lerp(Color.blue, Color.red, age01);
-
-            var leaf = _leaves[i];
-            Gizmos.color = c;
-            Gizmos.DrawCube(leaf.bounds.center, leaf.bounds.size);
-        }
     }
 
 
