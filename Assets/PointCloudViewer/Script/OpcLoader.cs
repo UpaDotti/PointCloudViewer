@@ -28,9 +28,6 @@ public class OpcLoader : MonoBehaviour
     private int _pointBudget = 2_000_000;
 
     [SerializeField]
-    private bool _autoTune = true;
-
-    [SerializeField]
     private int _unloadDelayFrames = 30;
 
     [NonSerialized]
@@ -394,7 +391,7 @@ public class OpcLoader : MonoBehaviour
         // visibleが無ければ何もしない
         if (_visibleNodes.Count == 0) return;
 
-        // maxPointsPerPixel を自動算出（手動モードなら設定値を使用）
+        // maxPointsPerPixel を自動算出
         float maxPPP = ComputeMaxPointsPerPixel();
 
         // 1パス目: 各ノードの希望点数を計算（pointCountキャップは water-filling 内で適用）
@@ -440,9 +437,6 @@ public class OpcLoader : MonoBehaviour
 
     private float ComputeMaxPointsPerPixel()
     {
-        // 自動チューニングOFFなら手動設定値を使用
-        if (!_autoTune) return _maxPointsPerPixel;
-
         // visible ノードのピクセル面積を合計
         float totalAreaPx = 0f;
         for (int i = 0; i < _visibleNodes.Count; i++)
