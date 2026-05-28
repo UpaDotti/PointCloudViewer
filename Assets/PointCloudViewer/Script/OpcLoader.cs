@@ -30,6 +30,9 @@ public class OpcLoader : MonoBehaviour
     private int _pointBudget = 2_000_000;
 
     [SerializeField]
+    private int _maxLoadsPerFrame = 10;
+
+    [SerializeField]
     private int _unloadDelayFrames = 30;
 
     [NonSerialized]
@@ -52,6 +55,7 @@ public class OpcLoader : MonoBehaviour
     private List<NodeState> _branchStates = new List<NodeState>();
     private List<int> _loadedLeafIndices = new List<int>();
     private List<int> _loadedBranchIndices = new List<int>();
+    private List<VisibleNode> _pendingLoads = new List<VisibleNode>();
     private GraphicsBuffer _quadIndex;
     private MaterialPropertyBlock _mpb;
     private RenderParams _rp;
@@ -531,28 +535,43 @@ public class OpcLoader : MonoBehaviour
     {
         int frame = Time.frameCount;
 
-        // Leaf ロード
+        // 未ロード候補を集める（lastWantedFrame は見えている全ノードに対して更新）
+        _pendingLoads.Clear();
         foreach (int leafIndex in _visibleLeafIndices)
         {
             NodeState state = _leafStates[leafIndex];
             state.lastWantedFrame = frame;
-
-            // すでにロード済みなら何もしない
             if (state.isLoaded) continue;
 
-            LoadLeafPoints(leafIndex);
+            _pendingLoads.Add(new VisibleNode
+            {
+                index = leafIndex,
+                isLeaf = true,
+                areaPx = state.areaPx,
+            });
         }
-
-        // Branch ロード
         foreach (int branchIndex in _visibleBranchIndices)
         {
             NodeState state = _branchStates[branchIndex];
             state.lastWantedFrame = frame;
-
-            // すでにロード済みなら何もしない
             if (state.isLoaded) continue;
 
-            LoadBranchPoints(branchIndex);
+            _pendingLoads.Add(new VisibleNode
+            {
+                index = branchIndex,
+                isLeaf = false,
+                areaPx = state.areaPx,
+            });
+        }
+
+        // 画面で目立つ順（面積大）にロード。1フレームあたり _maxLoadsPerFrame 個までで打ち切り。
+        _pendingLoads.Sort((a, b) => b.areaPx.CompareTo(a.areaPx));
+        int loadLimit = Mathf.Min(_pendingLoads.Count, _maxLoadsPerFrame);
+        for (int i = 0; i < loadLimit; i++)
+        {
+            VisibleNode node = _pendingLoads[i];
+            if (node.isLeaf) LoadLeafPoints(node.index);
+            else LoadBranchPoints(node.index);
         }
 
         // Leaf アンロード（後ろから走査: 内部でリストから削除されるため）

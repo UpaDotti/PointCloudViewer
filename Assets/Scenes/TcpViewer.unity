@@ -137,7 +137,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &809290255
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -359,15 +359,15 @@ MonoBehaviour:
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 32519042763eec04b81632552dddf182, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: 
+  m_EditorClassIdentifier: Assembly-CSharp::OpcLoader
   _filePath: Assets/sample.opc
   _pointMaterial: {fileID: 2100000, guid: 98fc76e6e3a384249b3f5ce8eb3a0793, type: 2}
   _pointSize: 1
+  _maxPointSize: 8
   _maxPointsPerPixel: 1
   _pointBudget: 2000000
+  _maxLoadsPerFrame: 10
   _unloadDelayFrames: 30
-  _drawVisibleGizmos: 0
-  _drawStreamingGizmos: 0
 --- !u!4 &1022487359
 Transform:
   m_ObjectHideFlags: 0
