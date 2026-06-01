@@ -20,16 +20,16 @@ Shader "Custom/PointCloud_Circle"
             float3 _ChunkMax;
             float _PointSize;
 
-            // QuadŽl‹÷‚ÌƒIƒtƒZƒbƒgŒW”
+            // Quadå››éš…ã®ã‚ªãƒ•ã‚»ãƒƒãƒˆä¿‚æ•°
             static const half2 OFFS4[4] = {
                 half2(-1,-1), half2(+1,-1),
                 half2(-1,+1), half2(+1,+1)
             };
             
-            static const uint MASK8  = 0xFFu;    // ‰ºˆÊ8ƒrƒbƒg—p
-            static const uint MASK16 = 0xFFFFu;  // ‰ºˆÊ16ƒrƒbƒg—p
+            static const uint MASK8  = 0xFFu;    // ä¸‹ä½8ãƒ“ãƒƒãƒˆç”¨
+            static const uint MASK16 = 0xFFFFu;  // ä¸‹ä½16ãƒ“ãƒƒãƒˆç”¨
 
-            // u16—ÊŽq‰»À•W‚ðmin/max‚Åƒ[ƒ‹ƒhÀ•W(float)‚Ö•œŒ³
+            // u16é‡å­åŒ–åº§æ¨™ã‚’min/maxã§ãƒ¯ãƒ¼ãƒ«ãƒ‰åº§æ¨™(float)ã¸å¾©å…ƒ
             inline float3 DecodePos(uint uxy, uint uz16, float3 minV, float3 maxV)
             {
                 uint ux = (uxy     & MASK16);
@@ -40,7 +40,7 @@ Shader "Custom/PointCloud_Circle"
                 return lerp(minV, maxV, t);
             }
 
-            // Color32‚ðRGBA‚É•ÏŠ·
+            // Color32ã‚’RGBAã«å¤‰æ›
             inline half4 DecodeColor(uint c)
             {
                 uint r = ( c        & MASK8);
@@ -56,37 +56,37 @@ Shader "Custom/PointCloud_Circle"
                 float2 localPos : TEXCOORD0;
             };
 
-            // SV_VertexID :  Œ»Ýˆ—‚µ‚Ä‚¢‚é’¸“_—ñ‚Ì’†‚Å‚Ì’Ê‚µ”Ô†iƒCƒ“ƒfƒbƒNƒXƒoƒbƒtƒ@j
-            // SV_InstanceID : Œ»Ýˆ—‚µ‚Ä‚¢‚éƒCƒ“ƒXƒ^ƒ“ƒX‚ª‰½”Ô–Ú‚©
+            // SV_VertexID :  ç¾åœ¨å‡¦ç†ã—ã¦ã„ã‚‹é ‚ç‚¹åˆ—ã®ä¸­ã§ã®é€šã—ç•ªå·ï¼ˆã‚¤ãƒ³ãƒ‡ãƒƒã‚¯ã‚¹ãƒãƒƒãƒ•ã‚¡ï¼‰
+            // SV_InstanceID : ç¾åœ¨å‡¦ç†ã—ã¦ã„ã‚‹ã‚¤ãƒ³ã‚¹ã‚¿ãƒ³ã‚¹ãŒä½•ç•ªç›®ã‹
             Varyings vert(uint svVertexID : SV_VertexID, uint svInstanceID : SV_InstanceID)
             {
                 Varyings o;
 
-                // Quad‚Ì‚Ç‚ÌˆÊ’u‚©‚ðu0`3v‚ÅŽæ“¾
+                // Quadã®ã©ã®ä½ç½®ã‹ã‚’ã€Œ0ã€œ3ã€ã§å–å¾—
                 const uint cornerID = svVertexID;
 
-                // “_ŒQƒoƒbƒtƒ@‚©‚çŽw’è‚Ì“_ƒf[ƒ^‚ðŽæ“¾
+                // ç‚¹ç¾¤ãƒãƒƒãƒ•ã‚¡ã‹ã‚‰æŒ‡å®šã®ç‚¹ãƒ‡ãƒ¼ã‚¿ã‚’å–å¾—
                 uint3 pointData = _Points[svInstanceID];
 
-                // “_ƒf[ƒ^‚©‚çƒ[ƒ‹ƒhÀ•W‚ð•œŒ³
+                // ç‚¹ãƒ‡ãƒ¼ã‚¿ã‹ã‚‰ãƒ¯ãƒ¼ãƒ«ãƒ‰åº§æ¨™ã‚’å¾©å…ƒ
                 float3 posWS = DecodePos(pointData.x, pointData.y, _ChunkMin, _ChunkMax);
 
-                // ƒ[ƒ‹ƒhÀ•W‚ðƒNƒŠƒbƒv‹óŠÔ‚É•ÏŠ·
+                // ãƒ¯ãƒ¼ãƒ«ãƒ‰åº§æ¨™ã‚’ã‚¯ãƒªãƒƒãƒ—ç©ºé–“ã«å¤‰æ›
                 float4 posCSC    = TransformWorldToHClip(posWS);
 
-                // NDCÀ•W‚É‚¨‚¯‚é1ƒsƒNƒZƒ‹‚ÌƒTƒCƒY‚ðŽæ“¾
+                // NDCåº§æ¨™ã«ãŠã‘ã‚‹1ãƒ”ã‚¯ã‚»ãƒ«ã®ã‚µã‚¤ã‚ºã‚’å–å¾—
                 float2 ndcPerPx = 2.0 / _ScreenParams.xy;
 
-                // Quad‚ÌŠp‚²‚Æ‚ÌƒIƒtƒZƒbƒg’l‚ðŒvŽZ
+                // Quadã®è§’ã”ã¨ã®ã‚ªãƒ•ã‚»ãƒƒãƒˆå€¤ã‚’è¨ˆç®—
                 half2  ndcOff   = OFFS4[cornerID] * (half)_PointSize * (half2)ndcPerPx;
 
-                // ’†SÀ•W‚ÉƒIƒtƒZƒbƒg‚ð‰Á‚¦ƒNƒŠƒbƒv‹óŠÔ‚ÌÅIˆÊ’u‚ðŒvŽZ
+                // ä¸­å¿ƒåº§æ¨™ã«ã‚ªãƒ•ã‚»ãƒƒãƒˆã‚’åŠ ãˆã‚¯ãƒªãƒƒãƒ—ç©ºé–“ã®æœ€çµ‚ä½ç½®ã‚’è¨ˆç®—
                 o.posCS = float4(posCSC.xy + (float2)ndcOff * posCSC.w, posCSC.zw);
 
-                // “_ƒf[ƒ^‚©‚çƒJƒ‰[‚ð•œŒ³
+                // ç‚¹ãƒ‡ãƒ¼ã‚¿ã‹ã‚‰ã‚«ãƒ©ãƒ¼ã‚’å¾©å…ƒ
                 o.col   = DecodeColor(pointData.z);
 
-                // -1`+1 ‚Ìƒ[ƒJƒ‹À•W
+                // -1ã€œ+1 ã®ãƒ­ãƒ¼ã‚«ãƒ«åº§æ¨™
                 o.localPos = OFFS4[cornerID];
 
                 return o;
@@ -94,13 +94,13 @@ Shader "Custom/PointCloud_Circle"
 
             half4 frag(Varyings i) : SV_Target
             {
-                 // (-1,-1)`(+1,+1)
+                 // (-1,-1)ã€œ(+1,+1)
                 float2 p = i.localPos;
 
-                // Œ´“_‚©‚ç‚Ì‹——£‚Ì“ñæ
+                // åŽŸç‚¹ã‹ã‚‰ã®è·é›¢ã®äºŒä¹—
                 float r2 = dot(p, p);
 
-                // ”¼Œa1‚Ì‰~‚ÌŠO‘¤‚È‚ç”jŠü
+                // åŠå¾„1ã®å††ã®å¤–å´ãªã‚‰ç ´æ£„
                 if (r2 > 1.0)
                     discard;
 
