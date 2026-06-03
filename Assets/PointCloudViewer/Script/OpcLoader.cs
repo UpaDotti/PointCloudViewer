@@ -16,11 +16,15 @@ public class OpcLoader : MonoBehaviour
     [SerializeField]
     private Material _pointMaterial;
 
+    [Header("Point Size")]
     [SerializeField]
-    private float _pointSize = 1.0f;
+    private float _minPixelSize = 0.1f;
 
     [SerializeField]
-    private float _maxPointSize = 8.0f;
+    private float _maxPixelSize = 8.0f;
+
+    [SerializeField]
+    private float _pointSizeScale = 1.0f;
 
     [Header("LOD / Streaming")]
     [SerializeField]
@@ -731,20 +735,23 @@ public class OpcLoader : MonoBehaviour
 
     private void DrawPointCloud()
     {
+        // ワールド半径→画面ピクセル変換係数（投影Y倍率 × 画面高さ/2）。カメラ依存で全ノード共通。
+        float worldToPixel = _mainCamera.projectionMatrix.m11 * Screen.height * 0.5f;
+
         // ロード済みの葉を描画
         foreach (int leafIndex in _loadedLeafIndices)
         {
-            DrawNode(_leafStates[leafIndex]);
+            DrawNode(_leafStates[leafIndex], worldToPixel);
         }
 
         // ロード済みの枝代表点を描画
         foreach (int branchIndex in _loadedBranchIndices)
         {
-            DrawNode(_branchStates[branchIndex]);
+            DrawNode(_branchStates[branchIndex], worldToPixel);
         }
     }
 
-    private void DrawNode(NodeState state)
+    private void DrawNode(NodeState state, float worldToPixel)
     {
         // 描画する点が無ければスキップ
         if (state.drawCount == 0) return;
@@ -756,14 +763,17 @@ public class OpcLoader : MonoBehaviour
         _indirectArgs[0].baseVertexIndex = 0u;
         state.indirectArgs.SetData(_indirectArgs);
 
-        // ノードの密度に応じて点サイズを拡大（疎なノードほど大きく描いて穴を埋める）
-        float adaptiveSize = ComputeAdaptivePointSize(state);
+        // ノードの密度から1点のワールド半径を求める（奥行きに応じた画面サイズ変換はシェーダ側で行う）
+        float worldRadius = ComputeWorldPointRadius(state);
 
         _mpb.Clear();
         _mpb.SetBuffer("_Points", state.pointBuffer);
         _mpb.SetVector("_ChunkMin", state.bounds.min);
         _mpb.SetVector("_ChunkMax", state.bounds.max);
-        _mpb.SetFloat("_PointSize", adaptiveSize);
+        _mpb.SetFloat("_PointWorldRadius", worldRadius);
+        _mpb.SetFloat("_WorldToPixel", worldToPixel);
+        _mpb.SetFloat("_MinPixelSize", _minPixelSize);
+        _mpb.SetFloat("_MaxPixelSize", _maxPixelSize);
 
         _rp.matProps = _mpb;
         _rp.worldBounds = state.bounds;
@@ -778,17 +788,16 @@ public class OpcLoader : MonoBehaviour
         );
     }
 
-    private float ComputeAdaptivePointSize(NodeState state)
+    private float ComputeWorldPointRadius(NodeState state)
     {
-        // 描画点数 / 面積が不明なときは設定値をそのまま使う
-        if (state.drawCount == 0 || state.areaPx <= 0f) return _pointSize;
+        // 描画点が無ければ0（呼び出し側で0は描画スキップ済み）
+        if (state.drawCount == 0) return 0f;
 
-        // 1点が覆うべき半径（正方格子で隣接接触する想定）
-        float densityRadius = Mathf.Sqrt(state.areaPx / state.drawCount) * 0.5f;
+        // ノードの外接球半径（中心から角までの距離）
+        float r = state.bounds.extents.magnitude;
 
-        // 設定値を最低保証、_maxPointSize を上限として密度に応じて拡大
-        float size = Mathf.Max(_pointSize, densityRadius);
-        return Mathf.Min(size, _maxPointSize);
+        // 断面(π r²)に drawCount 点を均した時の点間隔を半径の基準にし、_pointSizeScale で太さを調整
+        return _pointSizeScale * Mathf.Sqrt(Mathf.PI * r * r / state.drawCount);
     }
 
 

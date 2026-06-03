@@ -362,8 +362,9 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::OpcLoader
   _filePath: Assets/sample.opc
   _pointMaterial: {fileID: 2100000, guid: 98fc76e6e3a384249b3f5ce8eb3a0793, type: 2}
-  _pointSize: 1
-  _maxPointSize: 8
+  _minPixelSize: 0.1
+  _maxPixelSize: 8
+  _pointSizeScale: 1
   _maxPointsPerPixel: 1
   _pointBudget: 2000000
   _maxLoadsPerFrame: 10

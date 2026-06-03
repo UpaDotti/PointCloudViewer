@@ -18,7 +18,14 @@ Shader "Custom/PointCloud_Circle"
             StructuredBuffer<uint3> _Points;
             float3 _ChunkMin;
             float3 _ChunkMax;
-            float _PointSize;
+            // 1点が覆うべきワールド半径（奥行きに応じて画面ピクセルへ変換）
+            float _PointWorldRadius;
+            // ワールド半径→画面ピクセル変換係数（C#から渡す: 投影Y倍率 × 画面高さ/2）
+            float _WorldToPixel;
+            // 画面上の点サイズ下限（ピクセル半径）。遠くで消えないための最小値。
+            float _MinPixelSize;
+            // 画面上の点サイズ上限（ピクセル半径）。粗い面を近くで見た時の巨大ディスクを防ぐ。
+            float _MaxPixelSize;
 
             // Quad四隅のオフセット係数
             static const half2 OFFS4[4] = {
@@ -74,14 +81,22 @@ Shader "Custom/PointCloud_Circle"
                 // ワールド座標をクリップ空間に変換
                 float4 posCSC    = TransformWorldToHClip(posWS);
 
+                // クリップ空間のw（パースでは視点からの奥行き）。0割れ防止でクランプ。
+                float clipW = max(posCSC.w, 1e-4);
+                // ワールド半径を画面ピクセル半径へ変換（近いほど大きく/遠いほど小さく。正射では clipW=1）
+                float pixelRadius = _PointWorldRadius * _WorldToPixel / clipW;
+
+                // 下限と上限でクランプ（遠くで消えない / 粗い面の近接で巨大化しない）
+                pixelRadius = clamp(pixelRadius, _MinPixelSize, _MaxPixelSize);
+
                 // NDC座標における1ピクセルのサイズを取得
                 float2 ndcPerPx = 2.0 / _ScreenParams.xy;
 
-                // Quadの角ごとのオフセット値を計算
-                half2  ndcOff   = OFFS4[cornerID] * (half)_PointSize * (half2)ndcPerPx;
+                // Quadの角ごとのオフセット値を計算（ピクセル半径 → NDC）
+                float2 ndcOff = (float2)OFFS4[cornerID] * pixelRadius * ndcPerPx;
 
                 // 中心座標にオフセットを加えクリップ空間の最終位置を計算
-                o.posCS = float4(posCSC.xy + (float2)ndcOff * posCSC.w, posCSC.zw);
+                o.posCS = float4(posCSC.xy + ndcOff * posCSC.w, posCSC.zw);
 
                 // 点データからカラーを復元
                 o.col   = DecodeColor(pointData.z);
@@ -104,6 +119,7 @@ Shader "Custom/PointCloud_Circle"
                 if (r2 > 1.0)
                     discard;
 
+                // 点の色をそのまま出力
                 return i.col;
             }
             ENDHLSL
