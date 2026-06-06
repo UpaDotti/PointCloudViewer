@@ -67,6 +67,13 @@ public class OpcLoader : MonoBehaviour
     private readonly Plane[] _planes = new Plane[6];
     private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _indirectArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[1];
 
+    // フレームごとのカメラ情報キャッシュ（ノードごとのネイティブ呼び出しを避ける）
+    private Vector3 _camPos;
+    private Vector3 _camFwd;
+    private float _worldToPixel;
+    private float _minDepth;
+    private float _maxAreaPx;
+
     // シェーダプロパティID（毎フレームの文字列ハッシュ計算を避ける）
     private static readonly int _pointsId = Shader.PropertyToID("_Points");
     private static readonly int _chunkMinId = Shader.PropertyToID("_ChunkMin");
@@ -319,6 +326,14 @@ public class OpcLoader : MonoBehaviour
         // カメラの視錐台平面
         GeometryUtility.CalculateFrustumPlanes(_mainCamera, _planes);
 
+        // カメラ情報をフレームに1回だけキャッシュ（ComputeAreaPx用）
+        Transform camTransform = _mainCamera.transform;
+        _camPos = camTransform.position;
+        _camFwd = camTransform.forward;
+        _worldToPixel = _mainCamera.projectionMatrix.m11 * Screen.height * 0.5f;
+        _minDepth = _mainCamera.nearClipPlane + 1e-3f;
+        _maxAreaPx = (float)Screen.width * Screen.height;
+
         // ルートブランチを追加
         _branchIndicesToCheck.Enqueue(_rootBranchIndex);
 
@@ -390,34 +405,19 @@ public class OpcLoader : MonoBehaviour
 
     private float ComputeAreaPx(Bounds bounds)
     {
-        // Bounds球の半径 / 中心を取得
+        // Bounds球の半径を取得
         float r = bounds.extents.magnitude;
-        Vector3 center = bounds.center;
 
-        // カメラ前方のクリップ面より手前へクランプし、WorldToScreenPointの異常値を防ぐ
-        Camera cam = _mainCamera;
-        Vector3 camPos = cam.transform.position;
-        Vector3 camFwd = cam.transform.forward;
-        float depth = Vector3.Dot(center - camPos, camFwd);
-        float minDepth = cam.nearClipPlane + 1e-3f;
-        if (depth < minDepth)
-        {
-            // Bounds中心がカメラ背後/直近にある場合は手前位置へずらして安定化
-            center = center + camFwd * (minDepth - depth);
-        }
+        // カメラ前方方向の奥行き（背後/直近はクランプして異常値を防ぐ）
+        float depth = Vector3.Dot(bounds.center - _camPos, _camFwd);
+        if (depth < _minDepth) depth = _minDepth;
 
-        // Bounds球の半径をピクセル単位で取得
-        Vector3 sc = cam.WorldToScreenPoint(center);
-        Vector3 sx = cam.WorldToScreenPoint(center + cam.transform.right * r);
-        Vector3 sy = cam.WorldToScreenPoint(center + cam.transform.up * r);
-        float rPxX = (sx - sc).magnitude;
-        float rPxY = (sy - sc).magnitude;
-        float rPx = Mathf.Max(rPxX, rPxY);
+        // ワールド半径を画面ピクセル半径へ変換（シェーダと同じ式: r × worldToPixel ÷ 奥行き）
+        float rPx = r * _worldToPixel / depth;
 
         // 画面ピクセル数を上限とし、異常値が全体配分を支配しないようにする
-        float maxAreaPx = (float)Screen.width * Screen.height;
         float areaPx = Mathf.PI * rPx * rPx;
-        return Mathf.Clamp(areaPx, 1f, maxAreaPx);
+        return Mathf.Clamp(areaPx, 1f, _maxAreaPx);
     }
 
     private void ApplyPointBudget()
@@ -775,8 +775,8 @@ public class OpcLoader : MonoBehaviour
 
     private void DrawPointCloud()
     {
-        // ワールド半径→画面ピクセル変換係数（投影Y倍率 × 画面高さ/2）。カメラ依存で全ノード共通。
-        float worldToPixel = _mainCamera.projectionMatrix.m11 * Screen.height * 0.5f;
+        // ワールド半径→画面ピクセル変換係数（GetVisibleNodesでフレーム先頭にキャッシュ済み）
+        float worldToPixel = _worldToPixel;
 
         // ロード済みの葉を描画
         foreach (int leafIndex in _loadedLeafIndices)
