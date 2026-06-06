@@ -3,6 +3,7 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -74,6 +75,15 @@ public class OpcLoader : MonoBehaviour
     private static readonly int _worldToPixelId = Shader.PropertyToID("_WorldToPixel");
     private static readonly int _minPixelSizeId = Shader.PropertyToID("_MinPixelSize");
     private static readonly int _maxPixelSizeId = Shader.PropertyToID("_MaxPixelSize");
+
+    // Profiler用マーカー（Unity ProfilerのCPU Usageに"OpcLoader.～"として表示される）
+    private static readonly ProfilerMarker _markerGetVisibleNodes = new ProfilerMarker("OpcLoader.GetVisibleNodes");
+    private static readonly ProfilerMarker _markerApplyPointBudget = new ProfilerMarker("OpcLoader.ApplyPointBudget");
+    private static readonly ProfilerMarker _markerSyncStreaming = new ProfilerMarker("OpcLoader.SyncNodeStreaming");
+    private static readonly ProfilerMarker _markerDrawPointCloud = new ProfilerMarker("OpcLoader.DrawPointCloud");
+    private static readonly ProfilerMarker _markerFileRead = new ProfilerMarker("OpcLoader.Load.FileRead");
+    private static readonly ProfilerMarker _markerPackPoints = new ProfilerMarker("OpcLoader.Load.PackPoints");
+    private static readonly ProfilerMarker _markerGpuUpload = new ProfilerMarker("OpcLoader.Load.GpuUpload");
 
 
 
@@ -282,13 +292,22 @@ public class OpcLoader : MonoBehaviour
     private void Update()
     {
         // 視界に入っているノードを集める（葉 / 代表点で止める枝）
-        GetVisibleNodes();
+        using (_markerGetVisibleNodes.Auto())
+        {
+            GetVisibleNodes();
+        }
 
         // 点群データをロード・アンロード
-        SyncNodeStreaming();
+        using (_markerSyncStreaming.Auto())
+        {
+            SyncNodeStreaming();
+        }
 
         // 点群を描画
-        DrawPointCloud();
+        using (_markerDrawPointCloud.Auto())
+        {
+            DrawPointCloud();
+        }
     }
 
     private void GetVisibleNodes()
@@ -363,7 +382,10 @@ public class OpcLoader : MonoBehaviour
         }
 
         // Point Budgetを適用して描画対象を決定
-        ApplyPointBudget();
+        using (_markerApplyPointBudget.Auto())
+        {
+            ApplyPointBudget();
+        }
     }
 
     private float ComputeAreaPx(Bounds bounds)
@@ -655,35 +677,44 @@ public class OpcLoader : MonoBehaviour
         PackedPoint12[] packed = ArrayPool<PackedPoint12>.Shared.Rent(count);
 
         // 1ノード分をまとめて読み込み
-        int readBytes = 0;
-        while (readBytes < totalBytes)
+        using (_markerFileRead.Auto())
         {
-            int n = _reader.BaseStream.Read(raw, readBytes, totalBytes - readBytes);
-            if (n <= 0) break;
-            readBytes += n;
+            int readBytes = 0;
+            while (readBytes < totalBytes)
+            {
+                int n = _reader.BaseStream.Read(raw, readBytes, totalBytes - readBytes);
+                if (n <= 0) break;
+                readBytes += n;
+            }
         }
 
         // 点データを構築（バイト列からパック）
-        for (int i = 0; i < count; i++)
+        using (_markerPackPoints.Auto())
         {
-            int p = i * stride;
-            ushort x16 = (ushort)(raw[p] | (raw[p + 1] << 8));
-            ushort y16 = (ushort)(raw[p + 2] | (raw[p + 3] << 8));
-            ushort z16 = (ushort)(raw[p + 4] | (raw[p + 5] << 8));
+            for (int i = 0; i < count; i++)
+            {
+                int p = i * stride;
+                ushort x16 = (ushort)(raw[p] | (raw[p + 1] << 8));
+                ushort y16 = (ushort)(raw[p + 2] | (raw[p + 3] << 8));
+                ushort z16 = (ushort)(raw[p + 4] | (raw[p + 5] << 8));
 
-            byte r8 = raw[p + 6];
-            byte g8 = raw[p + 7];
-            byte b8 = raw[p + 8];
-            byte a8 = raw[p + 9];
+                byte r8 = raw[p + 6];
+                byte g8 = raw[p + 7];
+                byte b8 = raw[p + 8];
+                byte a8 = raw[p + 9];
 
-            packed[i].xy = (uint)(x16 | (y16 << 16));
-            packed[i].z = (uint)z16;
-            packed[i].rgba = (uint)(r8 | (g8 << 8) | (b8 << 16) | (a8 << 24));
+                packed[i].xy = (uint)(x16 | (y16 << 16));
+                packed[i].z = (uint)z16;
+                packed[i].rgba = (uint)(r8 | (g8 << 8) | (b8 << 16) | (a8 << 24));
+            }
         }
 
         // GPUバッファ作成（プール配列は余剰領域があるので count 個だけアップロード）
-        state.pointBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, 12);
-        state.pointBuffer.SetData(packed, 0, 0, count);
+        using (_markerGpuUpload.Auto())
+        {
+            state.pointBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, 12);
+            state.pointBuffer.SetData(packed, 0, 0, count);
+        }
 
         // Poolを返す
         ArrayPool<PackedPoint12>.Shared.Return(packed);
