@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Unity.Profiling;
 using UnityEngine;
 
 /// <summary>
@@ -13,9 +14,19 @@ public class BenchmarkSession : MonoBehaviour, IBenchmarkSink
     [SerializeField] private int _captureFps = 60;       // 0 にすると実時間で進む
     [SerializeField] private int _warmupFrames = 30;     // 計測開始までに捨てるフレーム
 
+    [Header("Profiler Markers")]
+    [SerializeField] private string[] _markerNames =
+    {
+        // フレームに1回発火するマーカーのみ対象（複数回発火は最後の1回しか取れないため）
+        "OpcLoader.GetVisibleNodes",
+        "OpcLoader.SyncNodeStreaming",
+        "OpcLoader.DrawPointCloud",
+    };
+
     public event Action OnFinished;
 
     private readonly Dictionary<string, List<double>> _samples = new();
+    private readonly List<ProfilerRecorder> _markerRecorders = new();
     private int _frameCount;
     private bool _running;
 
@@ -30,6 +41,7 @@ public class BenchmarkSession : MonoBehaviour, IBenchmarkSink
     {
         Benchmarker.ClearSink(this);
         if (_running) End(); // 途中で破棄されても結果は出す
+        DisposeMarkerRecorders(); // 未破棄のレコーダーが残らないよう保険
     }
 
     public void Begin()
@@ -38,6 +50,10 @@ public class BenchmarkSession : MonoBehaviour, IBenchmarkSink
         _samples.Clear();
         _frameCount = 0;
         if (_captureFps > 0) Time.captureFramerate = _captureFps;
+
+        // マーカーの計測を開始
+        StartMarkerRecorders();
+
         _running = true;
     }
 
@@ -46,6 +62,10 @@ public class BenchmarkSession : MonoBehaviour, IBenchmarkSink
         if (!_running) return;
         _running = false;
         Time.captureFramerate = 0;
+
+        // マーカーの計測を終了
+        DisposeMarkerRecorders();
+
         PrintStats();
         OnFinished?.Invoke();
     }
@@ -69,7 +89,38 @@ public class BenchmarkSession : MonoBehaviour, IBenchmarkSink
 
         // Frame ラベルは常に積む
         Record("Frame", Time.unscaledDeltaTime * 1000.0);
+
+        // 各マーカーの直近サンプルを記録（ナノ秒→ミリ秒）
+        for (int i = 0; i < _markerRecorders.Count; i++)
+        {
+            ProfilerRecorder recorder = _markerRecorders[i];
+            if (recorder.Valid && recorder.Count > 0)
+            {
+                Record(_markerNames[i], recorder.LastValue * 1e-6);
+            }
+        }
+
         _frameCount++;
+    }
+
+    // マーカー名ごとに ProfilerRecorder を起動する
+    private void StartMarkerRecorders()
+    {
+        DisposeMarkerRecorders();
+        foreach (string markerName in _markerNames)
+        {
+            _markerRecorders.Add(ProfilerRecorder.StartNew(ProfilerCategory.Scripts, markerName));
+        }
+    }
+
+    // ProfilerRecorder を全て破棄する（ネイティブリソースのため必須）
+    private void DisposeMarkerRecorders()
+    {
+        foreach (ProfilerRecorder recorder in _markerRecorders)
+        {
+            recorder.Dispose();
+        }
+        _markerRecorders.Clear();
     }
 
     private void PrintStats()
