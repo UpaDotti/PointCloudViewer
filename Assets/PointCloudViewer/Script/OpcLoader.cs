@@ -67,6 +67,10 @@ public class OpcLoader : MonoBehaviour
     private readonly Plane[] _planes = new Plane[6];
     private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _indirectArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[1];
 
+    // ロード専用のArrayPool（Sharedは1MB超の配列をプールせず毎回newになりGCスパイクを招くため）
+    private ArrayPool<byte> _rawBytePool;
+    private ArrayPool<PackedPoint12> _packedPool;
+
     // フレームごとのカメラ情報キャッシュ（ノードごとのネイティブ呼び出しを避ける）
     private Vector3 _camPos;
     private Vector3 _camFwd;
@@ -106,7 +110,23 @@ public class OpcLoader : MonoBehaviour
         BuildReference(_branches, _leaves);
         _leafStates = CreateNodeStates(_leaves.Count);
         _branchStates = CreateNodeStates(_branches.Count);
+        CreateLoadPools();
         SetupRendering();
+    }
+
+    // ロード用のArrayPoolを最大ノード点数に合わせて作成する
+    private void CreateLoadPools()
+    {
+        // 全ノード中の最大点数を求める（プールの配列サイズ上限を決めるため）
+        int maxPointCount = 1024;
+        foreach (Branch branch in _branches)
+            maxPointCount = Math.Max(maxPointCount, (int)branch.pointCount);
+        foreach (Leaf leaf in _leaves)
+            maxPointCount = Math.Max(maxPointCount, (int)leaf.pointCount);
+
+        // 同期ロードは同時に1組しか使わないので、サイズ帯ごとの保持本数は1で足りる
+        _rawBytePool = ArrayPool<byte>.Create(maxPointCount * _header.pointStrideBytes, 1);
+        _packedPool = ArrayPool<PackedPoint12>.Create(maxPointCount, 1);
     }
 
     private BinaryReader OpenFile(string filePath)
@@ -673,8 +693,8 @@ public class OpcLoader : MonoBehaviour
         int totalBytes = count * stride;
 
         // Poolを借りる（生バイト + パック済み配列）
-        byte[] raw = ArrayPool<byte>.Shared.Rent(totalBytes);
-        PackedPoint12[] packed = ArrayPool<PackedPoint12>.Shared.Rent(count);
+        byte[] raw = _rawBytePool.Rent(totalBytes);
+        PackedPoint12[] packed = _packedPool.Rent(count);
 
         // 1ノード分をまとめて読み込み
         using (_markerFileRead.Auto())
@@ -717,8 +737,8 @@ public class OpcLoader : MonoBehaviour
         }
 
         // Poolを返す
-        ArrayPool<PackedPoint12>.Shared.Return(packed);
-        ArrayPool<byte>.Shared.Return(raw);
+        _packedPool.Return(packed);
+        _rawBytePool.Return(raw);
 
         // Indirect args
         state.indirectArgs = new GraphicsBuffer(
