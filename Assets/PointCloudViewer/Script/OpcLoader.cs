@@ -66,6 +66,15 @@ public class OpcLoader : MonoBehaviour
     private readonly Plane[] _planes = new Plane[6];
     private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _indirectArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[1];
 
+    // シェーダプロパティID（毎フレームの文字列ハッシュ計算を避ける）
+    private static readonly int _pointsId = Shader.PropertyToID("_Points");
+    private static readonly int _chunkMinId = Shader.PropertyToID("_ChunkMin");
+    private static readonly int _chunkMaxId = Shader.PropertyToID("_ChunkMax");
+    private static readonly int _pointWorldRadiusId = Shader.PropertyToID("_PointWorldRadius");
+    private static readonly int _worldToPixelId = Shader.PropertyToID("_WorldToPixel");
+    private static readonly int _minPixelSizeId = Shader.PropertyToID("_MinPixelSize");
+    private static readonly int _maxPixelSizeId = Shader.PropertyToID("_MaxPixelSize");
+
 
 
     private void Start()
@@ -767,13 +776,13 @@ public class OpcLoader : MonoBehaviour
         float worldRadius = ComputeWorldPointRadius(state);
 
         _mpb.Clear();
-        _mpb.SetBuffer("_Points", state.pointBuffer);
-        _mpb.SetVector("_ChunkMin", state.bounds.min);
-        _mpb.SetVector("_ChunkMax", state.bounds.max);
-        _mpb.SetFloat("_PointWorldRadius", worldRadius);
-        _mpb.SetFloat("_WorldToPixel", worldToPixel);
-        _mpb.SetFloat("_MinPixelSize", _minPixelSize);
-        _mpb.SetFloat("_MaxPixelSize", _maxPixelSize);
+        _mpb.SetBuffer(_pointsId, state.pointBuffer);
+        _mpb.SetVector(_chunkMinId, state.bounds.min);
+        _mpb.SetVector(_chunkMaxId, state.bounds.max);
+        _mpb.SetFloat(_pointWorldRadiusId, worldRadius);
+        _mpb.SetFloat(_worldToPixelId, worldToPixel);
+        _mpb.SetFloat(_minPixelSizeId, _minPixelSize);
+        _mpb.SetFloat(_maxPixelSizeId, _maxPixelSize);
 
         _rp.matProps = _mpb;
         _rp.worldBounds = state.bounds;
