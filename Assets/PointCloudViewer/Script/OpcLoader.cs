@@ -46,33 +46,27 @@ public class OpcLoader : MonoBehaviour
     private OpcFile.Header _header;
     private OpcFile.Node[] _nodes;
     private Camera _mainCamera;
-    private List<VisibleNode> _visibleNodes = new List<VisibleNode>();
-    private List<NodeSelection> _selections = new List<NodeSelection>();
-    private List<uint> _desiredCounts = new List<uint>();
-    private List<uint> _finalAllocs = new List<uint>();
-    private List<int> _activeIndices = new List<int>();
-    private Queue<int> _nodeIndicesToCheck = new Queue<int>();
-    private GraphicsBuffer _quadIndex;
-    private MaterialPropertyBlock _mpb;
-    private RenderParams _rp;
     private readonly Plane[] _planes = new Plane[6];
+
+    // 今フレームのカメラ情報スナップショット（LOD選択と点サイズ計算に使う）
+    private CameraState _cameraState;
+
+    // LOD選択（可視判定+Point Budget配分）と、その選択結果
+    private NodeLodSelector _lodSelector;
+    private List<NodeSelection> _selections = new List<NodeSelection>();
 
     // 全ノード共有のGPU点プールと、ロード/アンロードを管理するストリーマ
     private GpuPointPool _pointPool;
     private PointStreamer _streamer;
 
     // マルチドロー用のコマンド列とノードごとの描画データ（毎フレーム詰め直してGPUへ転送）
+    private GraphicsBuffer _quadIndex;
+    private MaterialPropertyBlock _mpb;
+    private RenderParams _rp;
     private GraphicsBuffer _commandBuffer;
     private GraphicsBuffer _nodeDataBuffer;
     private GraphicsBuffer.IndirectDrawIndexedArgs[] _commandArgs;
     private NodeDrawData[] _nodeDrawData;
-
-    // フレームごとのカメラ情報キャッシュ（ノードごとのネイティブ呼び出しを避ける）
-    private Vector3 _camPos;
-    private Vector3 _camFwd;
-    private float _worldToPixel;
-    private float _minDepth;
-    private float _maxAreaPx;
 
     // シェーダプロパティID（毎フレームの文字列ハッシュ計算を避ける）
     private static readonly int _pointsId = Shader.PropertyToID("_Points");
@@ -83,7 +77,6 @@ public class OpcLoader : MonoBehaviour
 
     // Profiler用マーカー（Unity ProfilerのCPU Usageに"OpcLoader.～"として表示される）
     private static readonly ProfilerMarker _markerGetVisibleNodes = new ProfilerMarker("OpcLoader.GetVisibleNodes");
-    private static readonly ProfilerMarker _markerApplyPointBudget = new ProfilerMarker("OpcLoader.ApplyPointBudget");
     private static readonly ProfilerMarker _markerSyncStreaming = new ProfilerMarker("OpcLoader.SyncNodeStreaming");
     private static readonly ProfilerMarker _markerDrawPointCloud = new ProfilerMarker("OpcLoader.DrawPointCloud");
 
@@ -103,6 +96,7 @@ public class OpcLoader : MonoBehaviour
 
         _header = _file.FileHeader;
         _nodes = _file.Nodes;
+        _lodSelector = new NodeLodSelector(_file, _maxPointsPerPixel);
         SetupRendering();
         CreateStreaming();
     }
@@ -166,10 +160,11 @@ public class OpcLoader : MonoBehaviour
 
     private void Update()
     {
-        // 視界に入っているノードを集める（葉 / 代表点で止める枝）
+        // カメラ情報を取り込み、視界に入っているノードと描画点数を選択する
         using (_markerGetVisibleNodes.Auto())
         {
-            GetVisibleNodes();
+            _cameraState = CameraState.Capture(_mainCamera, _planes);
+            _lodSelector.Select(_cameraState, _pointBudget, _selections);
         }
 
         // 点群データをロード・アンロード
@@ -183,225 +178,6 @@ public class OpcLoader : MonoBehaviour
         {
             DrawPointCloud();
         }
-    }
-
-    private void GetVisibleNodes()
-    {
-        // 初期化
-        _visibleNodes.Clear();
-        _nodeIndicesToCheck.Clear();
-
-        // カメラの視錐台平面
-        GeometryUtility.CalculateFrustumPlanes(_mainCamera, _planes);
-
-        // カメラ情報をフレームに1回だけキャッシュ（ComputeAreaPx用）
-        Transform camTransform = _mainCamera.transform;
-        _camPos = camTransform.position;
-        _camFwd = camTransform.forward;
-        _worldToPixel = _mainCamera.projectionMatrix.m11 * Screen.height * 0.5f;
-        _minDepth = _mainCamera.nearClipPlane + 1e-3f;
-        _maxAreaPx = (float)Screen.width * Screen.height;
-
-        // ルートノードを追加
-        _nodeIndicesToCheck.Enqueue(_file.RootIndex);
-
-        // 探索ループ
-        while (_nodeIndicesToCheck.Count > 0)
-        {
-            // 処理対象のノードを取得
-            int nodeIndex = _nodeIndicesToCheck.Dequeue();
-            OpcFile.Node node = _nodes[nodeIndex];
-
-            // ノードが見えているか
-            if (!GeometryUtility.TestPlanesAABB(_planes, node.bounds))
-            {
-                // 子の判定をスキップ
-                continue;
-            }
-
-            // 代表点では足りない枝は子へ降りる
-            if (!node.isLeaf && !CanStopAtBranch(node))
-            {
-                for (int i = 0; i < 8; i++)
-                {
-                    int childIndex = _file.ChildIndices[node.childStart + i];
-                    if (childIndex >= 0)
-                    {
-                        _nodeIndicesToCheck.Enqueue(childIndex);
-                    }
-                }
-                continue;
-            }
-
-            // 葉、または代表点で足りる枝は描画候補に追加
-            _visibleNodes.Add(new VisibleNode
-            {
-                index = nodeIndex,
-                pointCount = node.pointCount,
-                areaPx = ComputeAreaPx(node.bounds),
-            });
-        }
-
-        // Point Budgetを適用して描画対象を決定
-        using (_markerApplyPointBudget.Auto())
-        {
-            ApplyPointBudget();
-        }
-    }
-
-    private float ComputeAreaPx(Bounds bounds)
-    {
-        // Bounds球の半径を取得
-        float r = bounds.extents.magnitude;
-
-        // カメラ前方方向の奥行き（背後/直近はクランプして異常値を防ぐ）
-        float depth = Vector3.Dot(bounds.center - _camPos, _camFwd);
-        if (depth < _minDepth) depth = _minDepth;
-
-        // ワールド半径を画面ピクセル半径へ変換（シェーダと同じ式: r × worldToPixel ÷ 奥行き）
-        float rPx = r * _worldToPixel / depth;
-
-        // 画面ピクセル数を上限とし、異常値が全体配分を支配しないようにする
-        float areaPx = Mathf.PI * rPx * rPx;
-        return Mathf.Clamp(areaPx, 1f, _maxAreaPx);
-    }
-
-    private void ApplyPointBudget()
-    {
-        // 選択結果リスト / 各種バッファを初期化
-        _selections.Clear();
-        _desiredCounts.Clear();
-        _finalAllocs.Clear();
-        _activeIndices.Clear();
-
-        // visibleが無ければ何もしない
-        if (_visibleNodes.Count == 0) return;
-
-        // maxPointsPerPixel を自動算出
-        float maxPPP = ComputeMaxPointsPerPixel();
-
-        // 1パス目: 各ノードの希望点数を計算（pointCountキャップは water-filling 内で適用）
-        for (int i = 0; i < _visibleNodes.Count; i++)
-        {
-            VisibleNode node = _visibleNodes[i];
-
-            // 画面サイズに比例した希望点数（最低1点）
-            uint wish = (uint)Mathf.Max(1f, node.areaPx * maxPPP);
-
-            _desiredCounts.Add(wish);
-            _finalAllocs.Add(0);
-            _activeIndices.Add(i);
-        }
-
-        // 2パス目: water-filling で予算を配分
-        AllocateWithWaterFilling();
-
-        // 3パス目: 配分結果を選択結果リストに反映
-        for (int i = 0; i < _visibleNodes.Count; i++)
-        {
-            VisibleNode node = _visibleNodes[i];
-
-            // 実点数を上限としてクランプ
-            uint alloc = _finalAllocs[i];
-            if (alloc > node.pointCount) alloc = node.pointCount;
-
-            _selections.Add(new NodeSelection
-            {
-                nodeIndex = node.index,
-                drawCount = alloc,
-                areaPx = node.areaPx,
-            });
-        }
-    }
-
-    private float ComputeMaxPointsPerPixel()
-    {
-        // visible ノードのピクセル面積を合計
-        float totalAreaPx = 0f;
-        for (int i = 0; i < _visibleNodes.Count; i++)
-            totalAreaPx += _visibleNodes[i].areaPx;
-
-        // 面積ゼロのフェールセーフ
-        if (totalAreaPx <= 0f) return _maxPointsPerPixel;
-
-        // Budget / 総面積で「画面に対するピクセル密度」を逆算（暴走防止のためクランプ）
-        float maxPPP = _pointBudget / totalAreaPx;
-        return Mathf.Clamp(maxPPP, 0.1f, 4.0f);
-    }
-
-    private void AllocateWithWaterFilling()
-    {
-        long remaining = _pointBudget;
-
-        // 飽和ノードを順次確定させ、残予算を非飽和ノードに再配分するループ
-        while (_activeIndices.Count > 0)
-        {
-            // 活性ノードの希望合計を集計
-            long activeWish = 0;
-            for (int j = 0; j < _activeIndices.Count; j++)
-                activeWish += _desiredCounts[_activeIndices[j]];
-
-            // 残予算で全希望を満たせるなら確定して終了
-            if (activeWish <= remaining)
-            {
-                for (int j = 0; j < _activeIndices.Count; j++)
-                {
-                    int idx = _activeIndices[j];
-                    uint pc = _visibleNodes[idx].pointCount;
-                    uint wish = _desiredCounts[idx];
-                    _finalAllocs[idx] = wish < pc ? wish : pc;
-                }
-                _activeIndices.Clear();
-                break;
-            }
-
-            // 一律スケールを計算
-            double scale = (double)remaining / activeWish;
-
-            // pointCount で頭打ちになるノードを確定 → 残予算から引いて活性から外す
-            bool anyCapped = false;
-            for (int j = _activeIndices.Count - 1; j >= 0; j--)
-            {
-                int idx = _activeIndices[j];
-                uint pc = _visibleNodes[idx].pointCount;
-                double scaled = _desiredCounts[idx] * scale;
-                if (scaled >= pc)
-                {
-                    _finalAllocs[idx] = pc;
-                    remaining -= pc;
-                    _activeIndices.RemoveAt(j);
-                    anyCapped = true;
-                }
-            }
-
-            // 誰も新たに飽和しなければスケールを確定して終了
-            if (!anyCapped)
-            {
-                for (int j = 0; j < _activeIndices.Count; j++)
-                {
-                    int idx = _activeIndices[j];
-                    uint scaled = (uint)Mathf.Max(1, Mathf.RoundToInt(_desiredCounts[idx] * (float)scale));
-                    _finalAllocs[idx] = scaled;
-                }
-                _activeIndices.Clear();
-                break;
-            }
-        }
-    }
-
-    private bool CanStopAtBranch(OpcFile.Node node)
-    {
-        // 代表点が無い枝は止められない
-        if (node.pointCount == 0) return false;
-
-        // 画面ピクセル面積
-        float areaPx = ComputeAreaPx(node.bounds);
-
-        // 画面に必要な点数（面積 × 1ピクセル当たりの目標点数）
-        float requiredCount = areaPx * _maxPointsPerPixel;
-
-        // 枝の代表点が必要点数を満たすなら、葉に降りなくてよい
-        return node.pointCount >= requiredCount;
     }
 
     private void DrawPointCloud()
@@ -425,7 +201,7 @@ public class OpcLoader : MonoBehaviour
         _mpb.Clear();
         _mpb.SetBuffer(_pointsId, _pointPool.Buffer);
         _mpb.SetBuffer(_nodeDataId, _nodeDataBuffer);
-        _mpb.SetFloat(_worldToPixelId, _worldToPixel);
+        _mpb.SetFloat(_worldToPixelId, _cameraState.worldToPixel);
         _mpb.SetFloat(_minPixelSizeId, _minPixelSize);
         _mpb.SetFloat(_maxPixelSizeId, _maxPixelSize);
         _rp.matProps = _mpb;
@@ -538,13 +314,5 @@ public class OpcLoader : MonoBehaviour
         public float worldRadius;   // 1点が覆うべきワールド半径
         public Vector3 boundsMax;   // ノードboundsの最大（位置復元用）
         public uint pointStart;     // 共有点プール内の先頭位置
-    }
-
-    // Point Budget適用前の候補ノード
-    private struct VisibleNode
-    {
-        public int index;
-        public uint pointCount;
-        public float areaPx;
     }
 }
