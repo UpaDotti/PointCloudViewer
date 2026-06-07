@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -51,12 +50,11 @@ public class OpcLoader : MonoBehaviour
     // 共有点プールの容量（点数）。Start時にファイル情報と予算から自動算出される。
     private int _pointPoolCapacity;
 
-    [NonSerialized]
-    private BinaryReader _reader;
-
-    private Header _header;
-    private List<Branch> _branches = new List<Branch>();
-    private List<Leaf> _leaves = new List<Leaf>();
+    // 開いたOPCファイル（ヘッダ+ノード索引）。読み込み失敗時はnullのまま。
+    private OpcFile _file;
+    private OpcFile.Header _header;
+    private List<OpcFile.Branch> _branches = new List<OpcFile.Branch>();
+    private List<OpcFile.Leaf> _leaves = new List<OpcFile.Leaf>();
     private long _bodyStart = -1;
     private int _rootBranchIndex = -1;
     private Camera _mainCamera;
@@ -120,20 +118,24 @@ public class OpcLoader : MonoBehaviour
     private void Start()
     {
         _mainCamera = Camera.main;
-        _reader = OpenFile(_filePath);
-        _header = ReadHeader(_reader);
-        _branches = ReadBranches(_reader, _header);
-        _leaves = ReadLeaves(_reader, _header);
-        _bodyStart = GetBodyStart();
-        _rootBranchIndex = GetRootBranchIndex(_branches);
-        BuildReference(_branches, _leaves);
+
+        // OPCファイルのヘッダとノード索引を読み込む（失敗したらエラーを出してこのコンポーネントを止める）
+        if (!OpcFile.TryOpen(GetFullPath(_filePath), out _file, out string error))
+        {
+            Debug.LogError($"OpcLoader: OPCファイルを開けませんでした。{error}");
+            enabled = false;
+            return;
+        }
+
+        _header = _file.FileHeader;
+        _branches = _file.Branches;
+        _leaves = _file.Leaves;
+        _bodyStart = _file.BodyStart;
+        _rootBranchIndex = _file.RootBranchIndex;
         _leafStates = CreateNodeStates(_leaves.Count);
         _branchStates = CreateNodeStates(_branches.Count);
         CreateLoadWorker();
         SetupRendering();
-
-        // 点データの読み込みはワーカーが専用ストリームで行うため、ヘッダ用リーダーはここで閉じる
-        CloseReader();
     }
 
     // 点データ読み込み用のワーカースレッドを起動する
@@ -141,17 +143,12 @@ public class OpcLoader : MonoBehaviour
     {
         // 全ノード中の最大点数を求める（ワーカー内プールの配列サイズ上限を決めるため）
         int maxPointCount = 1024;
-        foreach (Branch branch in _branches)
+        foreach (OpcFile.Branch branch in _branches)
             maxPointCount = Math.Max(maxPointCount, (int)branch.pointCount);
-        foreach (Leaf leaf in _leaves)
+        foreach (OpcFile.Leaf leaf in _leaves)
             maxPointCount = Math.Max(maxPointCount, (int)leaf.pointCount);
 
         _loadWorker = new OpcPointLoadWorker(GetFullPath(_filePath), _header.pointStrideBytes, maxPointCount);
-    }
-
-    private BinaryReader OpenFile(string filePath)
-    {
-        return new BinaryReader(File.OpenRead(GetFullPath(filePath)));
     }
 
     // "Assets/～" 形式のパスを絶対パスに変換する
@@ -159,157 +156,6 @@ public class OpcLoader : MonoBehaviour
     {
         string shortFilePath = filePath.Replace("Assets/", "");
         return Path.Combine(Application.dataPath, shortFilePath);
-    }
-
-    private Header ReadHeader(BinaryReader reader)
-    {
-        // OPCファイルのマジックチェック
-        byte[] magic = reader.ReadBytes(4);
-        byte[] expected = { (byte)'O', (byte)'P', (byte)'C', 0x00 };
-        if (!magic.SequenceEqual(expected))
-        {
-            return null;
-        }
-
-        Header header = new Header();
-
-        // Version
-        header.versionMajor = reader.ReadByte();
-        header.versionMinor = reader.ReadByte();
-        header.versionPatch = reader.ReadByte();
-
-        // Bound
-        header.size = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-        header.rootMin = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-        header.rootMax = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-
-        // Stats
-        header.branchCount = reader.ReadUInt32();
-        header.leafCount = reader.ReadUInt32();
-        header.totalPoints = reader.ReadUInt64();
-        header.pointStrideBytes = reader.ReadUInt16();
-
-        return header;
-    }
-
-    private List<Branch> ReadBranches(BinaryReader reader, Header header)
-    {
-        var branches = new List<Branch>((int)header.branchCount);
-
-        for (int i = 0; i < header.branchCount; i++)
-        {
-            var branch = new Branch();
-
-            branch.depth = reader.ReadByte();
-            branch.path = reader.ReadUInt64();
-
-            Vector3 min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-            Vector3 max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-            Vector3 center = (min + max) * 0.5f;
-            Vector3 size = max - min;
-            branch.bounds = new Bounds(center, size);
-
-            // 代表点の先頭オフセット
-            branch.baseOffset = reader.ReadUInt64();
-
-            // 代表点の点数
-            branch.pointCount = reader.ReadUInt32();
-
-            branches.Add(branch);
-        }
-
-        return branches;
-    }
-
-    private List<Leaf> ReadLeaves(BinaryReader reader, Header header)
-    {
-        var leaves = new List<Leaf>((int)header.leafCount);
-
-        for (int i = 0; i < header.leafCount; i++)
-        {
-            var leaf = new Leaf();
-
-            reader.ReadUInt32();
-
-            leaf.depth = reader.ReadByte();
-            leaf.path = reader.ReadUInt64();
-
-            Vector3 min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-            Vector3 max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
-            Vector3 center = (min + max) * 0.5f;
-            Vector3 size = max - min;
-            leaf.bounds = new Bounds(center, size);
-
-            leaf.baseOffset = reader.ReadUInt64();
-
-            leaf.pointCount = reader.ReadUInt32();
-
-            leaves.Add(leaf);
-        }
-
-        return leaves;
-    }
-
-    private long GetBodyStart()
-    {
-        return _reader.BaseStream.Position;
-    }
-
-    private int GetRootBranchIndex(List<Branch> branches)
-    {
-        for (int i = 0; i < branches.Count; i++)
-        {
-            if (branches[i].depth == 0)
-            {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private void BuildReference(List<Branch> branches, List<Leaf> leaves)
-    {
-        // パスとインデックスの辞書を作成
-        var branchIndexByPath = new Dictionary<ulong, int>(branches.Count);
-        var leafIndexByPath = new Dictionary<ulong, int>(leaves.Count);
-        for (int i = 0; i < branches.Count; i++)
-        {
-            branchIndexByPath[branches[i].path] = i;
-        }
-        for (int i = 0; i < leaves.Count; i++)
-        {
-            leafIndexByPath[leaves[i].path] = i;
-        }
-
-        // 関係を構築
-        for (int i = 0; i < branches.Count; i++)
-        {
-            Branch branch = branches[i];
-
-            for (int child = 0; child < 8; child++)
-            {
-                ulong childPath = (branch.path << 3) | (ulong)(uint)child;
-
-                NodeReference nodeRef = new NodeReference { index = -1, isLeaf = false };
-
-                if (branchIndexByPath.TryGetValue(childPath, out int bIndex))
-                {
-                    nodeRef.isLeaf = false;
-                    nodeRef.index = bIndex;
-                }
-                else if (leafIndexByPath.TryGetValue(childPath, out int lIndex))
-                {
-                    nodeRef.isLeaf = true;
-                    nodeRef.index = lIndex;
-                }
-                else
-                {
-
-                }
-
-                branch.references[child] = nodeRef;
-            }
-        }
     }
 
     private List<NodeState> CreateNodeStates(int count)
@@ -403,7 +249,7 @@ public class OpcLoader : MonoBehaviour
         {
             // 処理対象の枝を取得
             int branchIndex = _branchIndicesToCheck.Dequeue();
-            Branch branch = _branches[branchIndex];
+            OpcFile.Branch branch = _branches[branchIndex];
 
             // 枝が見えているか
             if (!GeometryUtility.TestPlanesAABB(_planes, branch.bounds))
@@ -428,7 +274,7 @@ public class OpcLoader : MonoBehaviour
             // 見えている子のノードを確認
             for (int i = 0; i < branch.references.Length; i++)
             {
-                NodeReference nodeRef = branch.references[i];
+                OpcFile.NodeReference nodeRef = branch.references[i];
 
                 // 存在しているか
                 if (!nodeRef.IsValid) continue;
@@ -437,7 +283,7 @@ public class OpcLoader : MonoBehaviour
                 if (nodeRef.isLeaf)
                 {
                     // 見えている場合は候補リストに追加
-                    Leaf leaf = _leaves[nodeRef.index];
+                    OpcFile.Leaf leaf = _leaves[nodeRef.index];
                     if (GeometryUtility.TestPlanesAABB(_planes, leaf.bounds))
                     {
                         _visibleNodes.Add(new VisibleNode
@@ -612,7 +458,7 @@ public class OpcLoader : MonoBehaviour
         }
     }
 
-    private bool CanStopAtBranch(Branch branch)
+    private bool CanStopAtBranch(OpcFile.Branch branch)
     {
         // 代表点が無い枝は止められない
         if (branch.pointCount == 0) return false;
@@ -720,7 +566,7 @@ public class OpcLoader : MonoBehaviour
 
     private void RequestLeafLoad(int leafIndex)
     {
-        Leaf leaf = _leaves[leafIndex];
+        OpcFile.Leaf leaf = _leaves[leafIndex];
         NodeState state = _leafStates[leafIndex];
 
         // ロード中フラグを立ててワーカーへ要求を積む（先頭から必要分だけ読む）
@@ -730,7 +576,7 @@ public class OpcLoader : MonoBehaviour
 
     private void RequestBranchLoad(int branchIndex)
     {
-        Branch branch = _branches[branchIndex];
+        OpcFile.Branch branch = _branches[branchIndex];
         NodeState state = _branchStates[branchIndex];
 
         // ロード中フラグを立ててワーカーへ要求を積む（先頭から必要分だけ読む）
@@ -844,8 +690,8 @@ public class OpcLoader : MonoBehaviour
     {
         // ファイル内の全ノードの実点数合計（プールがこれ以上必要になることはない）
         long totalNodePoints = 0;
-        foreach (Branch branch in _branches) totalNodePoints += branch.pointCount;
-        foreach (Leaf leaf in _leaves) totalNodePoints += leaf.pointCount;
+        foreach (OpcFile.Branch branch in _branches) totalNodePoints += branch.pointCount;
+        foreach (OpcFile.Leaf leaf in _leaves) totalNodePoints += leaf.pointCount;
 
         // 小さいファイルは全点数ぴったり、大きいファイルは予算×係数で頭打ち
         long capacity = Math.Min(totalNodePoints, (long)PoolCapacityBudgetMultiplier * _pointBudget);
@@ -1029,7 +875,6 @@ public class OpcLoader : MonoBehaviour
         UnloadAllNodes();
         UnloadIndexBuffer();
         DisposeSharedBuffers();
-        CloseReader();
     }
 
     // 共有点プールとマルチドロー用バッファを破棄する
@@ -1059,16 +904,6 @@ public class OpcLoader : MonoBehaviour
         }
     }
 
-    private void CloseReader()
-    {
-        if (_reader != null)
-        {
-            _reader.Close();
-            _reader.Dispose();
-            _reader = null;
-        }
-    }
-
     private void UnloadIndexBuffer()
     {
         _quadIndex?.Dispose();
@@ -1076,64 +911,6 @@ public class OpcLoader : MonoBehaviour
     }
 
 
-
-    [Serializable]
-    public class Header
-    {
-        [Header("Vsersion")]
-        public byte versionMajor;
-        public byte versionMinor;
-        public byte versionPatch;
-
-        [Header("Bound")]
-        public Vector3 size;
-        public Vector3 rootMin;
-        public Vector3 rootMax;
-
-        [Header("Status")]
-        public uint leafCount;
-        public uint branchCount;
-        public ulong totalPoints;
-        public ushort pointStrideBytes;
-    }
-
-    [Serializable]
-    public class Branch
-    {
-        public byte depth;
-        public ulong path;
-
-        public Bounds bounds;
-
-        // 枝の代表点用
-        public ulong baseOffset;
-        public uint pointCount;
-
-        public NodeReference[] references = new NodeReference[8];
-    }
-
-    [Serializable]
-    public class Leaf
-    {
-        public byte depth;
-        public ulong path;
-
-        public Bounds bounds;
-
-        public ulong baseOffset;
-
-        public uint pointCount;
-    }
-
-    [Serializable]
-    public struct NodeReference
-    {
-        public bool isLeaf;
-
-        public int index;
-
-        public bool IsValid => index >= 0;
-    }
 
     private class NodeState
     {
