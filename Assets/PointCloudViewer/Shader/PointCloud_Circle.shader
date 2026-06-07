@@ -13,13 +13,26 @@ Shader "Custom/PointCloud_Circle"
             HLSLPROGRAM
             #pragma vertex   vert
             #pragma fragment frag
+            #pragma target 4.5
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
 
+            // マルチドロー間接描画のコマンドID取得用（コマンドはIndexed形式）
+            #define UNITY_INDIRECT_DRAW_ARGS IndirectDrawIndexedArgs
+            #include "UnityIndirect.cginc"
+
+            // ノードごとの描画データ（C#側のNodeDrawDataと並びを一致させる）
+            struct NodeDrawData
+            {
+                float3 boundsMin;   // ノードboundsの最小（位置復元用）
+                float  worldRadius; // 1点が覆うべきワールド半径
+                float3 boundsMax;   // ノードboundsの最大（位置復元用）
+                uint   pointStart;  // 共有点プール内の先頭位置
+            };
+
+            // 全ノード共有の点プール
             StructuredBuffer<uint3> _Points;
-            float3 _ChunkMin;
-            float3 _ChunkMax;
-            // 1点が覆うべきワールド半径（奥行きに応じて画面ピクセルへ変換）
-            float _PointWorldRadius;
+            // コマンドID→ノード描画データ
+            StructuredBuffer<NodeDrawData> _NodeData;
             // ワールド半径→画面ピクセル変換係数（C#から渡す: 投影Y倍率 × 画面高さ/2）
             float _WorldToPixel;
             // 画面上の点サイズ下限（ピクセル半径）。遠くで消えないための最小値。
@@ -32,7 +45,7 @@ Shader "Custom/PointCloud_Circle"
                 half2(-1,-1), half2(+1,-1),
                 half2(-1,+1), half2(+1,+1)
             };
-            
+
             static const uint MASK8  = 0xFFu;    // 下位8ビット用
             static const uint MASK16 = 0xFFFFu;  // 下位16ビット用
 
@@ -69,14 +82,19 @@ Shader "Custom/PointCloud_Circle"
             {
                 Varyings o;
 
+                // マルチドローのコマンドIDから自ノードの描画データを取得
+                InitIndirectDrawArgs(0);
+                NodeDrawData node = _NodeData[GetCommandID(0)];
+                uint instanceID = GetIndirectInstanceID(svInstanceID);
+
                 // Quadのどの位置かを「0〜3」で取得
                 const uint cornerID = svVertexID;
 
-                // 点群バッファから指定の点データを取得
-                uint3 pointData = _Points[svInstanceID];
+                // 共有プールから自ノードの点データを取得
+                uint3 pointData = _Points[node.pointStart + instanceID];
 
                 // 点データからワールド座標を復元
-                float3 posWS = DecodePos(pointData.x, pointData.y, _ChunkMin, _ChunkMax);
+                float3 posWS = DecodePos(pointData.x, pointData.y, node.boundsMin, node.boundsMax);
 
                 // ワールド座標をクリップ空間に変換
                 float4 posCSC    = TransformWorldToHClip(posWS);
@@ -84,7 +102,7 @@ Shader "Custom/PointCloud_Circle"
                 // クリップ空間のw（パースでは視点からの奥行き）。0割れ防止でクランプ。
                 float clipW = max(posCSC.w, 1e-4);
                 // ワールド半径を画面ピクセル半径へ変換（近いほど大きく/遠いほど小さく。正射では clipW=1）
-                float pixelRadius = _PointWorldRadius * _WorldToPixel / clipW;
+                float pixelRadius = node.worldRadius * _WorldToPixel / clipW;
 
                 // 下限と上限でクランプ（遠くで消えない / 粗い面の近接で巨大化しない）
                 pixelRadius = clamp(pixelRadius, _MinPixelSize, _MaxPixelSize);

@@ -39,6 +39,18 @@ public class OpcLoader : MonoBehaviour
     [SerializeField]
     private int _unloadDelayFrames = 30;
 
+    // 描画必要数に対する先読み係数（多めにロードしてカメラ接近のたびの取り直しを減らす）
+    private const int PartialLoadMargin = 2;
+
+    // 1ノードの最低ロード点数（drawCountが極小でも取り直しが頻発しない程度を確保する）
+    private const int MinLoadCount = 1024;
+
+    // 共有点プール容量の自動算出に使う余裕係数（部分ロードの必要量 ≈ 予算×先読み係数 に視界外残留分の余裕を加える）
+    private const int PoolCapacityBudgetMultiplier = 4;
+
+    // 共有点プールの容量（点数）。Start時にファイル情報と予算から自動算出される。
+    private int _pointPoolCapacity;
+
     [NonSerialized]
     private BinaryReader _reader;
 
@@ -64,7 +76,17 @@ public class OpcLoader : MonoBehaviour
     private MaterialPropertyBlock _mpb;
     private RenderParams _rp;
     private readonly Plane[] _planes = new Plane[6];
-    private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _indirectArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[1];
+
+    // 全ノード共有の点プールと、その空き領域を管理するアロケータ
+    private GraphicsBuffer _pointPool;
+    private PointPoolAllocator _pointPoolAllocator;
+    private bool _poolFullWarned;
+
+    // マルチドロー用のコマンド列とノードごとの描画データ（毎フレーム詰め直してGPUへ転送）
+    private GraphicsBuffer _commandBuffer;
+    private GraphicsBuffer _nodeDataBuffer;
+    private GraphicsBuffer.IndirectDrawIndexedArgs[] _commandArgs;
+    private NodeDrawData[] _nodeDrawData;
 
     // ファイル読み込みとパックを担当するワーカースレッド
     private OpcPointLoadWorker _loadWorker;
@@ -78,9 +100,7 @@ public class OpcLoader : MonoBehaviour
 
     // シェーダプロパティID（毎フレームの文字列ハッシュ計算を避ける）
     private static readonly int _pointsId = Shader.PropertyToID("_Points");
-    private static readonly int _chunkMinId = Shader.PropertyToID("_ChunkMin");
-    private static readonly int _chunkMaxId = Shader.PropertyToID("_ChunkMax");
-    private static readonly int _pointWorldRadiusId = Shader.PropertyToID("_PointWorldRadius");
+    private static readonly int _nodeDataId = Shader.PropertyToID("_NodeData");
     private static readonly int _worldToPixelId = Shader.PropertyToID("_WorldToPixel");
     private static readonly int _minPixelSizeId = Shader.PropertyToID("_MinPixelSize");
     private static readonly int _maxPixelSizeId = Shader.PropertyToID("_MaxPixelSize");
@@ -314,9 +334,25 @@ public class OpcLoader : MonoBehaviour
 
         _mpb = new MaterialPropertyBlock();
 
+        // 全ノードを1回のマルチドローで描くため、描画範囲はルート全体で固定
+        Vector3 rootCenter = (_header.rootMin + _header.rootMax) * 0.5f;
+        _rp.worldBounds = new Bounds(rootCenter, _header.rootMax - _header.rootMin);
+
         uint[] index = { 0u, 1u, 2u, 2u, 1u, 3u };
         _quadIndex = new GraphicsBuffer(GraphicsBuffer.Target.Index, index.Length, sizeof(uint));
         _quadIndex.SetData(index);
+
+        // 共有点プールの容量を自動算出し、点プールと空き領域アロケータを作成
+        _pointPoolCapacity = ComputePointPoolCapacity();
+        _pointPool = new GraphicsBuffer(GraphicsBuffer.Target.Structured, _pointPoolCapacity, 12);
+        _pointPoolAllocator = new PointPoolAllocator(_pointPoolCapacity);
+
+        // マルチドロー用のコマンドバッファとノード描画データバッファを作成（最大数=全ノード数）
+        int maxNodes = _branches.Count + _leaves.Count;
+        _commandBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, maxNodes, GraphicsBuffer.IndirectDrawIndexedArgs.size);
+        _nodeDataBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, maxNodes, System.Runtime.InteropServices.Marshal.SizeOf<NodeDrawData>());
+        _commandArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[maxNodes];
+        _nodeDrawData = new NodeDrawData[maxNodes];
     }
 
 
@@ -601,7 +637,10 @@ public class OpcLoader : MonoBehaviour
         {
             NodeState state = _leafStates[leafIndex];
             state.lastWantedFrame = frame;
-            if (state.isLoaded || state.isLoading) continue;
+            if (state.isLoading) continue;
+
+            // ロード済みでも描画必要数がロード済み点数を超えたら追加ロード（全点ロード済みなら不要）
+            if (state.isLoaded && !NeedsMorePoints(state, _leaves[leafIndex].pointCount)) continue;
 
             _pendingLoads.Add(new VisibleNode
             {
@@ -614,7 +653,10 @@ public class OpcLoader : MonoBehaviour
         {
             NodeState state = _branchStates[branchIndex];
             state.lastWantedFrame = frame;
-            if (state.isLoaded || state.isLoading) continue;
+            if (state.isLoading) continue;
+
+            // ロード済みでも描画必要数がロード済み点数を超えたら追加ロード（全点ロード済みなら不要）
+            if (state.isLoaded && !NeedsMorePoints(state, _branches[branchIndex].pointCount)) continue;
 
             _pendingLoads.Add(new VisibleNode
             {
@@ -662,22 +704,38 @@ public class OpcLoader : MonoBehaviour
         }
     }
 
+    // 描画必要数に対してロード済み点数が不足しているか（全点ロード済みなら常にfalse）
+    private static bool NeedsMorePoints(NodeState state, uint nodePointCount)
+    {
+        if (state.loadedCount >= (int)nodePointCount) return false;
+        return state.drawCount > (uint)state.loadedCount;
+    }
+
+    // ロードする点数を決める（描画必要数の先読み係数倍を読み、実点数で頭打ち）
+    private static int ComputeLoadCount(uint drawCount, uint nodePointCount)
+    {
+        long desired = Math.Max(MinLoadCount, (long)drawCount * PartialLoadMargin);
+        return (int)Math.Min(desired, nodePointCount);
+    }
+
     private void RequestLeafLoad(int leafIndex)
     {
         Leaf leaf = _leaves[leafIndex];
+        NodeState state = _leafStates[leafIndex];
 
-        // ロード中フラグを立ててワーカーへ要求を積む
-        _leafStates[leafIndex].isLoading = true;
-        EnqueueLoadRequest(leafIndex, true, leaf.baseOffset, (int)leaf.pointCount);
+        // ロード中フラグを立ててワーカーへ要求を積む（先頭から必要分だけ読む）
+        state.isLoading = true;
+        EnqueueLoadRequest(leafIndex, true, leaf.baseOffset, ComputeLoadCount(state.drawCount, leaf.pointCount));
     }
 
     private void RequestBranchLoad(int branchIndex)
     {
         Branch branch = _branches[branchIndex];
+        NodeState state = _branchStates[branchIndex];
 
-        // ロード中フラグを立ててワーカーへ要求を積む
-        _branchStates[branchIndex].isLoading = true;
-        EnqueueLoadRequest(branchIndex, false, branch.baseOffset, (int)branch.pointCount);
+        // ロード中フラグを立ててワーカーへ要求を積む（先頭から必要分だけ読む）
+        state.isLoading = true;
+        EnqueueLoadRequest(branchIndex, false, branch.baseOffset, ComputeLoadCount(state.drawCount, branch.pointCount));
     }
 
     private void EnqueueLoadRequest(int index, bool isLeaf, ulong baseOffset, int count)
@@ -711,13 +769,22 @@ public class OpcLoader : MonoBehaviour
                 continue;
             }
 
-            // GPUバッファを構築してロード済みリストへ登録
+            // 共有プールへ点データをアップロード（追加ロード時は内部で旧領域を解放して差し替え）
             Bounds bounds = result.isLeaf ? _leaves[result.index].bounds : _branches[result.index].bounds;
-            UploadNodeBuffers(state, result.packed, result.count, bounds);
+            bool wasLoaded = state.isLoaded;
+            bool uploadSucceeded = UploadNodePoints(state, result.packed, result.count, bounds);
             _loadWorker.ReturnPacked(result.packed);
+
+            // プール満杯で確保できなかったノードは見送る（ロード済みなら旧データのまま描画継続）
+            if (!uploadSucceeded) continue;
+
+            // 新規ロードのときだけロード済みリストへ登録（差し替え時は登録済み）
             state.isLoaded = true;
-            if (result.isLeaf) _loadedLeafIndices.Add(result.index);
-            else _loadedBranchIndices.Add(result.index);
+            if (!wasLoaded)
+            {
+                if (result.isLeaf) _loadedLeafIndices.Add(result.index);
+                else _loadedBranchIndices.Add(result.index);
+            }
             uploaded++;
         }
 
@@ -728,31 +795,64 @@ public class OpcLoader : MonoBehaviour
         }
     }
 
-    private void UploadNodeBuffers(NodeState state, PackedPoint12[] packed, int count, Bounds bounds)
+    // 共有プールに領域を確保して点データをアップロードする。プール満杯なら false を返す。
+    private bool UploadNodePoints(NodeState state, PackedPoint12[] packed, int count, Bounds bounds)
     {
-        // GPUバッファ作成（プール配列は余剰領域があるので count 個だけアップロード）
+        // プールから連続領域を確保。足りなければ画面に不要なノードを先に解放して再試行する
+        if (!_pointPoolAllocator.TryAllocate(count, out int poolStart))
+        {
+            EvictStaleLoadedNodes();
+            if (!_pointPoolAllocator.TryAllocate(count, out poolStart))
+            {
+                // それでも満杯ならこのノードのロードは見送る（警告は1回だけ。空き状況も診断用に出す）
+                if (!_poolFullWarned)
+                {
+                    Debug.LogWarning(
+                        $"OpcLoader: 点プールが満杯のためノードのロードを見送ります。" +
+                        $"要求={count} 空き合計={_pointPoolAllocator.TotalFreeCount} 最大連続空き={_pointPoolAllocator.LargestFreeBlockCount} 容量={_pointPoolCapacity:N0}。" +
+                        $"頻発する場合は PoolCapacityBudgetMultiplier を増やしてください。");
+                    _poolFullWarned = true;
+                }
+                return false;
+            }
+        }
+
+        // 確保した位置へ点データをアップロード（プール配列は余剰領域があるので count 個だけ転送）
         long tickUploadStart = System.Diagnostics.Stopwatch.GetTimestamp();
         using (_markerGpuUpload.Auto())
         {
-            state.pointBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, 12);
-            state.pointBuffer.SetData(packed, 0, 0, count);
+            _pointPool.SetData(packed, 0, poolStart, count);
         }
         _frameGpuUploadMs += TicksToMs(System.Diagnostics.Stopwatch.GetTimestamp() - tickUploadStart);
 
-        // Indirect args
-        state.indirectArgs = new GraphicsBuffer(
-            GraphicsBuffer.Target.IndirectArguments,
-            1,
-            GraphicsBuffer.IndirectDrawIndexedArgs.size
-        );
+        // 追加ロードの差し替え時は旧領域を解放する（新確保が成功してから解放するので失敗時も安全）
+        if (state.poolStart >= 0)
+        {
+            _pointPoolAllocator.Free(state.poolStart, state.loadedCount);
+        }
 
-        _indirectArgs[0].indexCountPerInstance = 6u;
-        _indirectArgs[0].instanceCount = (uint)count;
-        _indirectArgs[0].startIndex = 0u;
-        _indirectArgs[0].baseVertexIndex = 0u;
-        state.indirectArgs.SetData(_indirectArgs);
-
+        // 確保情報とboundsをノードに記録
+        state.poolStart = poolStart;
+        state.loadedCount = count;
         state.bounds = bounds;
+        return true;
+    }
+
+    // 共有点プールの容量（点数）を自動算出する。
+    // 部分ロードの必要量（≈ 予算×先読み係数 + 視界外残留分）を賄える係数を予算に掛け、ファイル内の全実点数を上限とする。
+    private int ComputePointPoolCapacity()
+    {
+        // ファイル内の全ノードの実点数合計（プールがこれ以上必要になることはない）
+        long totalNodePoints = 0;
+        foreach (Branch branch in _branches) totalNodePoints += branch.pointCount;
+        foreach (Leaf leaf in _leaves) totalNodePoints += leaf.pointCount;
+
+        // 小さいファイルは全点数ぴったり、大きいファイルは予算×係数で頭打ち
+        long capacity = Math.Min(totalNodePoints, (long)PoolCapacityBudgetMultiplier * _pointBudget);
+        capacity = Math.Min(capacity, int.MaxValue);
+
+        Debug.Log($"OpcLoader: 点プール容量を {capacity:N0} 点（約 {capacity * 12 / (1024 * 1024)} MB）に自動設定しました。");
+        return (int)capacity;
     }
 
     // Stopwatchのティック数をミリ秒に変換する
@@ -768,7 +868,7 @@ public class OpcLoader : MonoBehaviour
         // ロード済みでなければ何もしない
         if (!state.isLoaded) return;
 
-        DisposeNodeBuffers(state);
+        FreeNodePoints(state);
 
         // ロード済みリストから削除
         _loadedLeafIndices.Remove(leafIndex);
@@ -781,88 +881,131 @@ public class OpcLoader : MonoBehaviour
         // ロード済みでなければ何もしない
         if (!state.isLoaded) return;
 
-        DisposeNodeBuffers(state);
+        FreeNodePoints(state);
 
         // ロード済みリストから削除
         _loadedBranchIndices.Remove(branchIndex);
     }
 
-    private void DisposeNodeBuffers(NodeState state)
+    // 今フレーム見えていないロード済みノードを解放してプールに空きを作る（メモリ圧迫時の早期アンロード）
+    private void EvictStaleLoadedNodes()
     {
-        state.pointBuffer?.Dispose();
-        state.pointBuffer = null;
+        int frame = Time.frameCount;
 
-        state.indirectArgs?.Dispose();
-        state.indirectArgs = null;
+        // 後ろから走査（内部でロード済みリストから削除されるため）
+        for (int i = _loadedLeafIndices.Count - 1; i >= 0; i--)
+        {
+            int leafIndex = _loadedLeafIndices[i];
+            if (_leafStates[leafIndex].lastWantedFrame < frame)
+            {
+                UnloadLeafPoints(leafIndex);
+            }
+        }
+        for (int i = _loadedBranchIndices.Count - 1; i >= 0; i--)
+        {
+            int branchIndex = _loadedBranchIndices[i];
+            if (_branchStates[branchIndex].lastWantedFrame < frame)
+            {
+                UnloadBranchPoints(branchIndex);
+            }
+        }
+    }
+
+    // 共有プールに確保していた領域を解放してロード済みフラグを下ろす
+    private void FreeNodePoints(NodeState state)
+    {
+        if (state.poolStart >= 0)
+        {
+            _pointPoolAllocator.Free(state.poolStart, state.loadedCount);
+            state.poolStart = -1;
+            state.loadedCount = 0;
+        }
 
         state.isLoaded = false;
     }
 
     private void DrawPointCloud()
     {
-        // ワールド半径→画面ピクセル変換係数（GetVisibleNodesでフレーム先頭にキャッシュ済み）
-        float worldToPixel = _worldToPixel;
-
-        // ロード済みの葉を描画
+        // ロード済みノードの描画コマンドとノード描画データを詰める
+        int commandCount = 0;
         foreach (int leafIndex in _loadedLeafIndices)
         {
-            DrawNode(_leafStates[leafIndex], worldToPixel);
+            commandCount = AppendDrawCommand(_leafStates[leafIndex], commandCount);
         }
-
-        // ロード済みの枝代表点を描画
         foreach (int branchIndex in _loadedBranchIndices)
         {
-            DrawNode(_branchStates[branchIndex], worldToPixel);
+            commandCount = AppendDrawCommand(_branchStates[branchIndex], commandCount);
         }
-    }
 
-    private void DrawNode(NodeState state, float worldToPixel)
-    {
-        // 描画する点が無ければスキップ
-        if (state.drawCount == 0) return;
+        // 描画対象が無ければ何もしない
+        if (commandCount == 0) return;
 
-        // 今フレームの描画点数で indirectArgs を更新（先頭drawCount点だけ描画される）
-        _indirectArgs[0].indexCountPerInstance = 6u;
-        _indirectArgs[0].instanceCount = state.drawCount;
-        _indirectArgs[0].startIndex = 0u;
-        _indirectArgs[0].baseVertexIndex = 0u;
-        state.indirectArgs.SetData(_indirectArgs);
+        // 今フレーム分のコマンドとノード描画データをGPUへ転送
+        _commandBuffer.SetData(_commandArgs, 0, 0, commandCount);
+        _nodeDataBuffer.SetData(_nodeDrawData, 0, 0, commandCount);
 
-        // ノードの密度から1点のワールド半径を求める（奥行きに応じた画面サイズ変換はシェーダ側で行う）
-        float worldRadius = ComputeWorldPointRadius(state);
-
+        // 全ノード共通のパラメータを設定（ノード別パラメータは _NodeData から引く）
         _mpb.Clear();
-        _mpb.SetBuffer(_pointsId, state.pointBuffer);
-        _mpb.SetVector(_chunkMinId, state.bounds.min);
-        _mpb.SetVector(_chunkMaxId, state.bounds.max);
-        _mpb.SetFloat(_pointWorldRadiusId, worldRadius);
-        _mpb.SetFloat(_worldToPixelId, worldToPixel);
+        _mpb.SetBuffer(_pointsId, _pointPool);
+        _mpb.SetBuffer(_nodeDataId, _nodeDataBuffer);
+        _mpb.SetFloat(_worldToPixelId, _worldToPixel);
         _mpb.SetFloat(_minPixelSizeId, _minPixelSize);
         _mpb.SetFloat(_maxPixelSizeId, _maxPixelSize);
-
         _rp.matProps = _mpb;
-        _rp.worldBounds = state.bounds;
 
+        // 全ノードを1回のマルチドローで描画
         Graphics.RenderPrimitivesIndexedIndirect(
             _rp,
             MeshTopology.Triangles,
             _quadIndex,
-            state.indirectArgs,
-            1,
+            _commandBuffer,
+            commandCount,
             0
         );
     }
 
-    private float ComputeWorldPointRadius(NodeState state)
+    // 1ノード分の描画コマンドとノード描画データを配列に積み、積んだ後のコマンド数を返す
+    private int AppendDrawCommand(NodeState state, int commandCount)
+    {
+        // 描画点数はロード済み点数を上限とする（追加ロードが追いつくまでの間はある分だけ描く）
+        uint instanceCount = state.drawCount;
+        if (instanceCount > (uint)state.loadedCount) instanceCount = (uint)state.loadedCount;
+
+        // 描画する点が無ければスキップ
+        if (instanceCount == 0) return commandCount;
+
+        // 先頭instanceCount点だけ描画するコマンド
+        _commandArgs[commandCount] = new GraphicsBuffer.IndirectDrawIndexedArgs
+        {
+            indexCountPerInstance = 6u,
+            instanceCount = instanceCount,
+            startIndex = 0u,
+            baseVertexIndex = 0u,
+            startInstance = 0u,
+        };
+
+        // シェーダがコマンドIDで引くノード別パラメータ
+        _nodeDrawData[commandCount] = new NodeDrawData
+        {
+            boundsMin = state.bounds.min,
+            worldRadius = ComputeWorldPointRadius(state.bounds, instanceCount),
+            boundsMax = state.bounds.max,
+            pointStart = (uint)state.poolStart,
+        };
+
+        return commandCount + 1;
+    }
+
+    private float ComputeWorldPointRadius(Bounds bounds, uint drawCount)
     {
         // 描画点が無ければ0（呼び出し側で0は描画スキップ済み）
-        if (state.drawCount == 0) return 0f;
+        if (drawCount == 0) return 0f;
 
         // ノードの外接球半径（中心から角までの距離）
-        float r = state.bounds.extents.magnitude;
+        float r = bounds.extents.magnitude;
 
         // 断面(π r²)に drawCount 点を均した時の点間隔を半径の基準にし、_pointSizeScale で太さを調整
-        return _pointSizeScale * Mathf.Sqrt(Mathf.PI * r * r / state.drawCount);
+        return _pointSizeScale * Mathf.Sqrt(Mathf.PI * r * r / drawCount);
     }
 
 
@@ -885,7 +1028,23 @@ public class OpcLoader : MonoBehaviour
 
         UnloadAllNodes();
         UnloadIndexBuffer();
+        DisposeSharedBuffers();
         CloseReader();
+    }
+
+    // 共有点プールとマルチドロー用バッファを破棄する
+    private void DisposeSharedBuffers()
+    {
+        _pointPool?.Dispose();
+        _pointPool = null;
+
+        _commandBuffer?.Dispose();
+        _commandBuffer = null;
+
+        _nodeDataBuffer?.Dispose();
+        _nodeDataBuffer = null;
+
+        _pointPoolAllocator = null;
     }
 
     private void UnloadAllNodes()
@@ -978,8 +1137,12 @@ public class OpcLoader : MonoBehaviour
 
     private class NodeState
     {
-        public GraphicsBuffer pointBuffer;
-        public GraphicsBuffer indirectArgs;
+        // 共有点プール内の確保位置（点単位、未ロード時は -1）
+        public int poolStart = -1;
+
+        // 共有プールにロード済みの点数（部分ロードのため実点数より少ないことがある）
+        public int loadedCount = 0;
+
         public Bounds bounds;
         public bool isLoaded = false;
 
@@ -993,6 +1156,15 @@ public class OpcLoader : MonoBehaviour
 
         // 今フレームでノードが画面に占めるピクセル面積（点サイズ計算用）
         public float areaPx = 0f;
+    }
+
+    // シェーダへ渡すノードごとの描画データ（シェーダ側のNodeDrawDataと並びを一致させる）
+    private struct NodeDrawData
+    {
+        public Vector3 boundsMin;   // ノードboundsの最小（位置復元用）
+        public float worldRadius;   // 1点が覆うべきワールド半径
+        public Vector3 boundsMax;   // ノードboundsの最大（位置復元用）
+        public uint pointStart;     // 共有点プール内の先頭位置
     }
 
     // Point Budget適用前の候補ノード
