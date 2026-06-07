@@ -8,7 +8,7 @@ using UnityEngine;
 /// </summary>
 public class GpuPointPool : IDisposable
 {
-    // PackedPoint12のバイト数（uint×3）
+    // PackedPoint12のバイト数（uint×3 = 12バイト）
     private const int PointStrideBytes = 12;
 
     private GraphicsBuffer _buffer;
