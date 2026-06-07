@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -67,9 +66,8 @@ public class OpcLoader : MonoBehaviour
     private readonly Plane[] _planes = new Plane[6];
     private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _indirectArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[1];
 
-    // ロード専用のArrayPool（Sharedは1MB超の配列をプールせず毎回newになりGCスパイクを招くため）
-    private ArrayPool<byte> _rawBytePool;
-    private ArrayPool<PackedPoint12> _packedPool;
+    // ファイル読み込みとパックを担当するワーカースレッド
+    private OpcPointLoadWorker _loadWorker;
 
     // フレームごとのカメラ情報キャッシュ（ノードごとのネイティブ呼び出しを避ける）
     private Vector3 _camPos;
@@ -87,13 +85,14 @@ public class OpcLoader : MonoBehaviour
     private static readonly int _minPixelSizeId = Shader.PropertyToID("_MinPixelSize");
     private static readonly int _maxPixelSizeId = Shader.PropertyToID("_MaxPixelSize");
 
+    // GPUアップロードの所要時間（1フレーム分を合算してベンチマークに記録する）
+    private double _frameGpuUploadMs;
+
     // Profiler用マーカー（Unity ProfilerのCPU Usageに"OpcLoader.～"として表示される）
     private static readonly ProfilerMarker _markerGetVisibleNodes = new ProfilerMarker("OpcLoader.GetVisibleNodes");
     private static readonly ProfilerMarker _markerApplyPointBudget = new ProfilerMarker("OpcLoader.ApplyPointBudget");
     private static readonly ProfilerMarker _markerSyncStreaming = new ProfilerMarker("OpcLoader.SyncNodeStreaming");
     private static readonly ProfilerMarker _markerDrawPointCloud = new ProfilerMarker("OpcLoader.DrawPointCloud");
-    private static readonly ProfilerMarker _markerFileRead = new ProfilerMarker("OpcLoader.Load.FileRead");
-    private static readonly ProfilerMarker _markerPackPoints = new ProfilerMarker("OpcLoader.Load.PackPoints");
     private static readonly ProfilerMarker _markerGpuUpload = new ProfilerMarker("OpcLoader.Load.GpuUpload");
 
 
@@ -110,30 +109,36 @@ public class OpcLoader : MonoBehaviour
         BuildReference(_branches, _leaves);
         _leafStates = CreateNodeStates(_leaves.Count);
         _branchStates = CreateNodeStates(_branches.Count);
-        CreateLoadPools();
+        CreateLoadWorker();
         SetupRendering();
+
+        // 点データの読み込みはワーカーが専用ストリームで行うため、ヘッダ用リーダーはここで閉じる
+        CloseReader();
     }
 
-    // ロード用のArrayPoolを最大ノード点数に合わせて作成する
-    private void CreateLoadPools()
+    // 点データ読み込み用のワーカースレッドを起動する
+    private void CreateLoadWorker()
     {
-        // 全ノード中の最大点数を求める（プールの配列サイズ上限を決めるため）
+        // 全ノード中の最大点数を求める（ワーカー内プールの配列サイズ上限を決めるため）
         int maxPointCount = 1024;
         foreach (Branch branch in _branches)
             maxPointCount = Math.Max(maxPointCount, (int)branch.pointCount);
         foreach (Leaf leaf in _leaves)
             maxPointCount = Math.Max(maxPointCount, (int)leaf.pointCount);
 
-        // 同期ロードは同時に1組しか使わないので、サイズ帯ごとの保持本数は1で足りる
-        _rawBytePool = ArrayPool<byte>.Create(maxPointCount * _header.pointStrideBytes, 1);
-        _packedPool = ArrayPool<PackedPoint12>.Create(maxPointCount, 1);
+        _loadWorker = new OpcPointLoadWorker(GetFullPath(_filePath), _header.pointStrideBytes, maxPointCount);
     }
 
     private BinaryReader OpenFile(string filePath)
     {
+        return new BinaryReader(File.OpenRead(GetFullPath(filePath)));
+    }
+
+    // "Assets/～" 形式のパスを絶対パスに変換する
+    private string GetFullPath(string filePath)
+    {
         string shortFilePath = filePath.Replace("Assets/", "");
-        string fullPath = Path.Combine(Application.dataPath, shortFilePath);
-        return new BinaryReader(File.OpenRead(fullPath));
+        return Path.Combine(Application.dataPath, shortFilePath);
     }
 
     private Header ReadHeader(BinaryReader reader)
@@ -596,7 +601,7 @@ public class OpcLoader : MonoBehaviour
         {
             NodeState state = _leafStates[leafIndex];
             state.lastWantedFrame = frame;
-            if (state.isLoaded) continue;
+            if (state.isLoaded || state.isLoading) continue;
 
             _pendingLoads.Add(new VisibleNode
             {
@@ -609,7 +614,7 @@ public class OpcLoader : MonoBehaviour
         {
             NodeState state = _branchStates[branchIndex];
             state.lastWantedFrame = frame;
-            if (state.isLoaded) continue;
+            if (state.isLoaded || state.isLoading) continue;
 
             _pendingLoads.Add(new VisibleNode
             {
@@ -619,14 +624,17 @@ public class OpcLoader : MonoBehaviour
             });
         }
 
-        // 画面で目立つ順（面積大）にロード。1フレームあたり _maxLoadsPerFrame 個までで打ち切り。
+        // ワーカーが読み終えたノードをGPUへアップロード
+        UploadCompletedLoads(frame);
+
+        // 画面で目立つ順（面積大）にワーカーへロード要求。1フレームあたり _maxLoadsPerFrame 個までで打ち切り。
         _pendingLoads.Sort((a, b) => b.areaPx.CompareTo(a.areaPx));
-        int loadLimit = Mathf.Min(_pendingLoads.Count, _maxLoadsPerFrame);
-        for (int i = 0; i < loadLimit; i++)
+        int requestLimit = Mathf.Min(_pendingLoads.Count, _maxLoadsPerFrame);
+        for (int i = 0; i < requestLimit; i++)
         {
             VisibleNode node = _pendingLoads[i];
-            if (node.isLeaf) LoadLeafPoints(node.index);
-            else LoadBranchPoints(node.index);
+            if (node.isLeaf) RequestLeafLoad(node.index);
+            else RequestBranchLoad(node.index);
         }
 
         // Leaf アンロード（後ろから走査: 内部でリストから削除されるため）
@@ -654,91 +662,82 @@ public class OpcLoader : MonoBehaviour
         }
     }
 
-    private void LoadLeafPoints(int leafIndex)
+    private void RequestLeafLoad(int leafIndex)
     {
         Leaf leaf = _leaves[leafIndex];
-        NodeState state = _leafStates[leafIndex];
 
-        // 点数を取得してGPUバッファを構築
-        int count = (int)leaf.pointCount;
-        FillNodeBuffers(state, leaf.baseOffset, count, leaf.bounds);
-        state.isLoaded = true;
-
-        // ロード済みリストに追加
-        _loadedLeafIndices.Add(leafIndex);
+        // ロード中フラグを立ててワーカーへ要求を積む
+        _leafStates[leafIndex].isLoading = true;
+        EnqueueLoadRequest(leafIndex, true, leaf.baseOffset, (int)leaf.pointCount);
     }
 
-    private void LoadBranchPoints(int branchIndex)
+    private void RequestBranchLoad(int branchIndex)
     {
         Branch branch = _branches[branchIndex];
-        NodeState state = _branchStates[branchIndex];
 
-        // 点数を取得してGPUバッファを構築
-        int count = (int)branch.pointCount;
-        FillNodeBuffers(state, branch.baseOffset, count, branch.bounds);
-        state.isLoaded = true;
-
-        // ロード済みリストに追加
-        _loadedBranchIndices.Add(branchIndex);
+        // ロード中フラグを立ててワーカーへ要求を積む
+        _branchStates[branchIndex].isLoading = true;
+        EnqueueLoadRequest(branchIndex, false, branch.baseOffset, (int)branch.pointCount);
     }
 
-    private void FillNodeBuffers(NodeState state, ulong baseOffset, int count, Bounds bounds)
+    private void EnqueueLoadRequest(int index, bool isLeaf, ulong baseOffset, int count)
     {
-        // Seek
-        int stride = _header.pointStrideBytes;
-        long seekPos = _bodyStart + (long)(baseOffset * (ulong)stride);
-        _reader.BaseStream.Seek(seekPos, SeekOrigin.Begin);
-
-        // 読み込みバイト数
-        int totalBytes = count * stride;
-
-        // Poolを借りる（生バイト + パック済み配列）
-        byte[] raw = _rawBytePool.Rent(totalBytes);
-        PackedPoint12[] packed = _packedPool.Rent(count);
-
-        // 1ノード分をまとめて読み込み
-        using (_markerFileRead.Auto())
+        // ファイル先頭からのシーク位置を計算してワーカーへ渡す
+        long seekPos = _bodyStart + (long)(baseOffset * (ulong)_header.pointStrideBytes);
+        _loadWorker.Enqueue(new OpcPointLoadWorker.LoadRequest
         {
-            int readBytes = 0;
-            while (readBytes < totalBytes)
+            index = index,
+            isLeaf = isLeaf,
+            seekPos = seekPos,
+            count = count,
+        });
+    }
+
+    // ワーカーが読み終えたノードのGPUバッファを構築する（1フレームあたり _maxLoadsPerFrame 個まで）
+    private void UploadCompletedLoads(int frame)
+    {
+        _frameGpuUploadMs = 0;
+
+        int uploaded = 0;
+        while (uploaded < _maxLoadsPerFrame && _loadWorker.TryDequeue(out OpcPointLoadWorker.LoadResult result))
+        {
+            NodeState state = result.isLeaf ? _leafStates[result.index] : _branchStates[result.index];
+            state.isLoading = false;
+
+            // 読み込み中に不要になったノードは破棄（GPUバッファを作らない）
+            if (frame - state.lastWantedFrame > _unloadDelayFrames)
             {
-                int n = _reader.BaseStream.Read(raw, readBytes, totalBytes - readBytes);
-                if (n <= 0) break;
-                readBytes += n;
+                _loadWorker.ReturnPacked(result.packed);
+                continue;
             }
+
+            // GPUバッファを構築してロード済みリストへ登録
+            Bounds bounds = result.isLeaf ? _leaves[result.index].bounds : _branches[result.index].bounds;
+            UploadNodeBuffers(state, result.packed, result.count, bounds);
+            _loadWorker.ReturnPacked(result.packed);
+            state.isLoaded = true;
+            if (result.isLeaf) _loadedLeafIndices.Add(result.index);
+            else _loadedBranchIndices.Add(result.index);
+            uploaded++;
         }
 
-        // 点データを構築（バイト列からパック）
-        using (_markerPackPoints.Auto())
+        // アップロードがあったフレームだけ所要時間を記録（0埋めで平均を薄めない）
+        if (uploaded > 0)
         {
-            for (int i = 0; i < count; i++)
-            {
-                int p = i * stride;
-                ushort x16 = (ushort)(raw[p] | (raw[p + 1] << 8));
-                ushort y16 = (ushort)(raw[p + 2] | (raw[p + 3] << 8));
-                ushort z16 = (ushort)(raw[p + 4] | (raw[p + 5] << 8));
-
-                byte r8 = raw[p + 6];
-                byte g8 = raw[p + 7];
-                byte b8 = raw[p + 8];
-                byte a8 = raw[p + 9];
-
-                packed[i].xy = (uint)(x16 | (y16 << 16));
-                packed[i].z = (uint)z16;
-                packed[i].rgba = (uint)(r8 | (g8 << 8) | (b8 << 16) | (a8 << 24));
-            }
+            Benchmarker.Record("OpcLoader.Load.GpuUpload", _frameGpuUploadMs);
         }
+    }
 
+    private void UploadNodeBuffers(NodeState state, PackedPoint12[] packed, int count, Bounds bounds)
+    {
         // GPUバッファ作成（プール配列は余剰領域があるので count 個だけアップロード）
+        long tickUploadStart = System.Diagnostics.Stopwatch.GetTimestamp();
         using (_markerGpuUpload.Auto())
         {
             state.pointBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, count, 12);
             state.pointBuffer.SetData(packed, 0, 0, count);
         }
-
-        // Poolを返す
-        _packedPool.Return(packed);
-        _rawBytePool.Return(raw);
+        _frameGpuUploadMs += TicksToMs(System.Diagnostics.Stopwatch.GetTimestamp() - tickUploadStart);
 
         // Indirect args
         state.indirectArgs = new GraphicsBuffer(
@@ -754,6 +753,12 @@ public class OpcLoader : MonoBehaviour
         state.indirectArgs.SetData(_indirectArgs);
 
         state.bounds = bounds;
+    }
+
+    // Stopwatchのティック数をミリ秒に変換する
+    private static double TicksToMs(long ticks)
+    {
+        return ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
     }
 
     private void UnloadLeafPoints(int leafIndex)
@@ -874,6 +879,10 @@ public class OpcLoader : MonoBehaviour
 
     private void Cleanup()
     {
+        // ワーカーを先に止める（停止後に新しい結果が出ないようにする）
+        _loadWorker?.Dispose();
+        _loadWorker = null;
+
         UnloadAllNodes();
         UnloadIndexBuffer();
         CloseReader();
@@ -973,6 +982,10 @@ public class OpcLoader : MonoBehaviour
         public GraphicsBuffer indirectArgs;
         public Bounds bounds;
         public bool isLoaded = false;
+
+        // ワーカーへロード要求済みで結果待ちの間 true（二重要求を防ぐ）
+        public bool isLoading = false;
+
         public int lastWantedFrame = -1;
 
         // 今フレームで描画する点数（先頭からこの数だけ描画）
@@ -980,13 +993,6 @@ public class OpcLoader : MonoBehaviour
 
         // 今フレームでノードが画面に占めるピクセル面積（点サイズ計算用）
         public float areaPx = 0f;
-    }
-
-    private struct PackedPoint12
-    {
-        public uint xy;
-        public uint z;
-        public uint rgba;
     }
 
     // Point Budget適用前の候補ノード
