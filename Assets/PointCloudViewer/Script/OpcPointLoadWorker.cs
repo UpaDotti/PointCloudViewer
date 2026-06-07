@@ -26,6 +26,9 @@ public class OpcPointLoadWorker : IDisposable
         public int index;
         public PackedPoint12[] packed;
         public int count;
+
+        // 読み込みに失敗したら true（packed は null。呼び出し側はロード中フラグだけ解除する）
+        public bool failed;
     }
 
     private readonly BlockingCollection<LoadRequest> _requests = new BlockingCollection<LoadRequest>(new ConcurrentQueue<LoadRequest>());
@@ -68,10 +71,13 @@ public class OpcPointLoadWorker : IDisposable
         return _results.TryDequeue(out result);
     }
 
-    /// <summary>結果のpacked配列をプールへ返却する（GPUアップロード後に必ず呼ぶ）</summary>
+    /// <summary>結果のpacked配列をプールへ返却する（GPUアップロード後に必ず呼ぶ。nullは無視）</summary>
     public void ReturnPacked(PackedPoint12[] packed)
     {
-        _packedPool.Return(packed);
+        if (packed != null)
+        {
+            _packedPool.Return(packed);
+        }
     }
 
     // 要求キューが閉じられるまでロードを繰り返すワーカー本体
@@ -79,15 +85,18 @@ public class OpcPointLoadWorker : IDisposable
     {
         foreach (LoadRequest request in _requests.GetConsumingEnumerable())
         {
+            LoadResult result;
             try
             {
-                _results.Enqueue(LoadOne(request));
+                result = LoadOne(request);
             }
             catch (Exception e)
             {
-                // 失敗したノードは isLoading のまま残るが、スレッド自体は止めない
+                // 失敗しても必ず失敗結果を返す（ノードをロード中のまま固まらせない）。スレッド自体は止めない。
                 UnityEngine.Debug.LogException(e);
+                result = new LoadResult { index = request.index, failed = true };
             }
+            _results.Enqueue(result);
         }
     }
 
@@ -101,10 +110,10 @@ public class OpcPointLoadWorker : IDisposable
         PackedPoint12[] packed = _packedPool.Rent(request.count);
 
         // 1ノード分をまとめて読み込み
+        int readBytes = 0;
         using (_markerFileRead.Auto())
         {
             _stream.Seek(request.seekPos, SeekOrigin.Begin);
-            int readBytes = 0;
             while (readBytes < totalBytes)
             {
                 int n = _stream.Read(raw, readBytes, totalBytes - readBytes);
@@ -113,10 +122,13 @@ public class OpcPointLoadWorker : IDisposable
             }
         }
 
+        // 実際に読めたバイト数から点数を確定する（ファイル末尾/破損時にゴミ点を作らない）
+        int actualCount = Math.Min(request.count, readBytes / _stride);
+
         // 点データを構築（バイト列からパック）
         using (_markerPackPoints.Auto())
         {
-            for (int i = 0; i < request.count; i++)
+            for (int i = 0; i < actualCount; i++)
             {
                 int p = i * _stride;
                 ushort x16 = (ushort)(raw[p] | (raw[p + 1] << 8));
@@ -141,7 +153,7 @@ public class OpcPointLoadWorker : IDisposable
         {
             index = request.index,
             packed = packed,
-            count = request.count,
+            count = actualCount,
         };
     }
 
@@ -153,10 +165,10 @@ public class OpcPointLoadWorker : IDisposable
         _requests.Dispose();
         _stream.Dispose();
 
-        // 未回収の結果配列をプールへ返す
+        // 未回収の結果配列をプールへ返す（失敗結果はpackedがnullなのでスキップ）
         while (_results.TryDequeue(out LoadResult result))
         {
-            _packedPool.Return(result.packed);
+            ReturnPacked(result.packed);
         }
     }
 }

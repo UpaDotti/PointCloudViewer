@@ -519,6 +519,9 @@ public class OpcLoader : MonoBehaviour
             NodeState state = _nodeStates[result.index];
             state.isLoading = false;
 
+            // 読み込みに失敗したノードは見送る（まだ見えていれば次のフレームで再要求される）
+            if (result.failed) continue;
+
             // 読み込み中に不要になったノードは破棄（GPUバッファを作らない）
             if (frame - state.lastWantedFrame > _unloadDelayFrames)
             {
