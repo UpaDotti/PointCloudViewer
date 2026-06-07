@@ -16,7 +16,6 @@ public class OpcPointLoadWorker : IDisposable
     public struct LoadRequest
     {
         public int index;
-        public bool isLeaf;
         public long seekPos;
         public int count;
     }
@@ -25,7 +24,6 @@ public class OpcPointLoadWorker : IDisposable
     public struct LoadResult
     {
         public int index;
-        public bool isLeaf;
         public PackedPoint12[] packed;
         public int count;
     }
@@ -142,7 +140,6 @@ public class OpcPointLoadWorker : IDisposable
         return new LoadResult
         {
             index = request.index,
-            isLeaf = request.isLeaf,
             packed = packed,
             count = request.count,
         };

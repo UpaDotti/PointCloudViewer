@@ -7,18 +7,30 @@ using UnityEngine;
 /// <summary>
 /// OPCファイルのヘッダとノード索引を読み込んで保持するフォーマット層。
 /// 点データ本体は読まない（点データのストリーミングはワーカーが担当する）。
+/// ファイル上は枝（代表点）と葉（実点）に分かれているが、ストリーミング・描画にとっては
+/// どちらも「オフセット+点数+bounds」で同じ扱いができるため、統合した Node 配列として公開する。
 /// </summary>
 public class OpcFile
 {
     public Header FileHeader { get; private set; }
-    public List<Branch> Branches { get; private set; }
-    public List<Leaf> Leaves { get; private set; }
+
+    // 統合ノード配列（先頭に枝、後ろに葉を格納する）
+    public Node[] Nodes { get; private set; }
+
+    // 枝ごとの子参照テーブル（枝1つにつき8スロット。-1は子なし）
+    public int[] ChildIndices { get; private set; }
 
     // 点データ本体のファイル先頭からの開始位置
     public long BodyStart { get; private set; }
 
-    // ルート枝（depth==0）のインデックス。見つからなければ -1。
-    public int RootBranchIndex { get; private set; }
+    // ルートノード（depth==0の枝）のインデックス
+    public int RootIndex { get; private set; }
+
+    // 全ノード中の最大点数（読み込みバッファのサイズ上限決定用）
+    public int MaxNodePointCount { get; private set; }
+
+    // 全ノードの点数合計（枝の代表点+葉の実点。点プール容量の上限決定用）
+    public long TotalNodePoints { get; private set; }
 
     // 生成は TryOpen 経由のみ（検証を通らないインスタンスを作らせない）
     private OpcFile() { }
@@ -53,14 +65,22 @@ public class OpcFile
 
                 var result = new OpcFile();
                 result.FileHeader = ReadHeader(reader);
-                result.Branches = ReadBranches(reader, result.FileHeader);
-                result.Leaves = ReadLeaves(reader, result.FileHeader);
+
+                // 枝→葉の順でレコードを読み、統合ノード配列に詰める（パスは子参照構築にだけ使う一時データ）
+                int branchCount = (int)result.FileHeader.branchCount;
+                int leafCount = (int)result.FileHeader.leafCount;
+                result.Nodes = new Node[branchCount + leafCount];
+                ulong[] paths = new ulong[branchCount + leafCount];
+                ReadBranches(reader, result.Nodes, paths, branchCount);
+                ReadLeaves(reader, result.Nodes, paths, branchCount, leafCount);
+
                 result.BodyStart = reader.BaseStream.Position;
-                result.RootBranchIndex = FindRootBranchIndex(result.Branches);
-                BuildReference(result.Branches, result.Leaves);
+                result.ChildIndices = BuildChildIndices(result.Nodes, paths, branchCount);
+                result.RootIndex = FindRootIndex(result.Nodes, branchCount);
+                ComputePointStats(result);
 
                 // ルートが無い索引は走査できないのでエラー扱い
-                if (result.RootBranchIndex < 0)
+                if (result.RootIndex < 0)
                 {
                     error = $"ルート枝（depth=0）が見つかりません: {fullPath}";
                     return false;
@@ -106,70 +126,112 @@ public class OpcFile
         return header;
     }
 
-    private static List<Branch> ReadBranches(BinaryReader reader, Header header)
+    // 枝レコードを統合配列の先頭側（0〜branchCount-1）に読み込む
+    private static void ReadBranches(BinaryReader reader, Node[] nodes, ulong[] paths, int branchCount)
     {
-        var branches = new List<Branch>((int)header.branchCount);
-
-        for (int i = 0; i < header.branchCount; i++)
+        for (int i = 0; i < branchCount; i++)
         {
-            var branch = new Branch();
+            Node node = new Node();
+            node.isLeaf = false;
 
-            branch.depth = reader.ReadByte();
-            branch.path = reader.ReadUInt64();
+            node.depth = reader.ReadByte();
+            paths[i] = reader.ReadUInt64();
 
             Vector3 min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
             Vector3 max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
             Vector3 center = (min + max) * 0.5f;
             Vector3 size = max - min;
-            branch.bounds = new Bounds(center, size);
+            node.bounds = new Bounds(center, size);
 
             // 代表点の先頭オフセット
-            branch.baseOffset = reader.ReadUInt64();
+            node.baseOffset = reader.ReadUInt64();
 
             // 代表点の点数
-            branch.pointCount = reader.ReadUInt32();
+            node.pointCount = reader.ReadUInt32();
 
-            branches.Add(branch);
+            // 子参照テーブル内の自分のスロット先頭
+            node.childStart = i * 8;
+
+            nodes[i] = node;
         }
-
-        return branches;
     }
 
-    private static List<Leaf> ReadLeaves(BinaryReader reader, Header header)
+    // 葉レコードを統合配列の後ろ側（branchCount〜）に読み込む
+    private static void ReadLeaves(BinaryReader reader, Node[] nodes, ulong[] paths, int branchCount, int leafCount)
     {
-        var leaves = new List<Leaf>((int)header.leafCount);
-
-        for (int i = 0; i < header.leafCount; i++)
+        for (int i = 0; i < leafCount; i++)
         {
-            var leaf = new Leaf();
+            Node node = new Node();
+            node.isLeaf = true;
 
             // 葉レコード先頭の未使用フィールド（読み飛ばし）
             reader.ReadUInt32();
 
-            leaf.depth = reader.ReadByte();
-            leaf.path = reader.ReadUInt64();
+            node.depth = reader.ReadByte();
+            paths[branchCount + i] = reader.ReadUInt64();
 
             Vector3 min = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
             Vector3 max = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
             Vector3 center = (min + max) * 0.5f;
             Vector3 size = max - min;
-            leaf.bounds = new Bounds(center, size);
+            node.bounds = new Bounds(center, size);
 
-            leaf.baseOffset = reader.ReadUInt64();
+            node.baseOffset = reader.ReadUInt64();
 
-            leaf.pointCount = reader.ReadUInt32();
+            node.pointCount = reader.ReadUInt32();
 
-            leaves.Add(leaf);
+            // 葉に子は無い
+            node.childStart = -1;
+
+            nodes[branchCount + i] = node;
         }
-
-        return leaves;
     }
 
-    private static int FindRootBranchIndex(List<Branch> branches)
+    // 各枝の8子スロットに統合配列内のノードインデックスを構築する
+    private static int[] BuildChildIndices(Node[] nodes, ulong[] paths, int branchCount)
     {
-        for (int i = 0; i < branches.Count; i++)
+        // パスとインデックスの辞書を作成（枝と葉でパスが衝突しうるため辞書は分け、枝優先で引く）
+        var branchIndexByPath = new Dictionary<ulong, int>(branchCount);
+        var leafIndexByPath = new Dictionary<ulong, int>(nodes.Length - branchCount);
+        for (int i = 0; i < branchCount; i++)
         {
-            if (branches[i].depth == 0)
+            branchIndexByPath[paths[i]] = i;
+        }
+        for (int i = branchCount; i < nodes.Length; i++)
+        {
+            leafIndexByPath[paths[i]] = i;
+        }
+
+        // 枝ごとに子8方向のパスを引いて参照を構築
+        int[] childIndices = new int[branchCount * 8];
+        for (int i = 0; i < branchCount; i++)
+        {
+            for (int child = 0; child < 8; child++)
+            {
+                ulong childPath = (paths[i] << 3) | (ulong)(uint)child;
+
+                int childIndex = -1;
+                if (branchIndexByPath.TryGetValue(childPath, out int bIndex))
+                {
+                    childIndex = bIndex;
+                }
+                else if (leafIndexByPath.TryGetValue(childPath, out int lIndex))
+                {
+                    childIndex = lIndex;
+                }
+
+                childIndices[i * 8 + child] = childIndex;
+            }
+        }
+
+        return childIndices;
+    }
+
+    private static int FindRootIndex(Node[] nodes, int branchCount)
+    {
+        for (int i = 0; i < branchCount; i++)
+        {
+            if (nodes[i].depth == 0)
             {
                 return i;
             }
@@ -177,46 +239,18 @@ public class OpcFile
         return -1;
     }
 
-    // 各枝の8子スロットに枝/葉への参照を構築する
-    private static void BuildReference(List<Branch> branches, List<Leaf> leaves)
+    // 最大点数と点数合計を集計する（読み込みバッファ・点プールのサイズ決定用）
+    private static void ComputePointStats(OpcFile file)
     {
-        // パスとインデックスの辞書を作成
-        var branchIndexByPath = new Dictionary<ulong, int>(branches.Count);
-        var leafIndexByPath = new Dictionary<ulong, int>(leaves.Count);
-        for (int i = 0; i < branches.Count; i++)
+        int maxCount = 0;
+        long totalCount = 0;
+        foreach (Node node in file.Nodes)
         {
-            branchIndexByPath[branches[i].path] = i;
+            maxCount = Math.Max(maxCount, (int)node.pointCount);
+            totalCount += node.pointCount;
         }
-        for (int i = 0; i < leaves.Count; i++)
-        {
-            leafIndexByPath[leaves[i].path] = i;
-        }
-
-        // 関係を構築
-        for (int i = 0; i < branches.Count; i++)
-        {
-            Branch branch = branches[i];
-
-            for (int child = 0; child < 8; child++)
-            {
-                ulong childPath = (branch.path << 3) | (ulong)(uint)child;
-
-                NodeReference nodeRef = new NodeReference { index = -1, isLeaf = false };
-
-                if (branchIndexByPath.TryGetValue(childPath, out int bIndex))
-                {
-                    nodeRef.isLeaf = false;
-                    nodeRef.index = bIndex;
-                }
-                else if (leafIndexByPath.TryGetValue(childPath, out int lIndex))
-                {
-                    nodeRef.isLeaf = true;
-                    nodeRef.index = lIndex;
-                }
-
-                branch.references[child] = nodeRef;
-            }
-        }
+        file.MaxNodePointCount = maxCount;
+        file.TotalNodePoints = totalCount;
     }
 
 
@@ -240,38 +274,21 @@ public class OpcFile
         public ushort pointStrideBytes;
     }
 
-    public class Branch
+    /// <summary>
+    /// 統合ノード。枝は代表点、葉は実点を指すが、どちらも「オフセット+点数+bounds」として同じ扱いができる。
+    /// </summary>
+    public struct Node
     {
         public byte depth;
-        public ulong path;
-
-        public Bounds bounds;
-
-        // 枝の代表点用
-        public ulong baseOffset;
-        public uint pointCount;
-
-        public NodeReference[] references = new NodeReference[8];
-    }
-
-    public class Leaf
-    {
-        public byte depth;
-        public ulong path;
-
-        public Bounds bounds;
-
-        public ulong baseOffset;
-
-        public uint pointCount;
-    }
-
-    public struct NodeReference
-    {
         public bool isLeaf;
 
-        public int index;
+        public Bounds bounds;
 
-        public bool IsValid => index >= 0;
+        // 点データの先頭オフセット（点単位。枝=代表点、葉=実点）
+        public ulong baseOffset;
+        public uint pointCount;
+
+        // ChildIndices内の自分の子スロット先頭（枝のみ。葉は-1）
+        public int childStart;
     }
 }

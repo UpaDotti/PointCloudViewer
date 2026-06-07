@@ -50,25 +50,20 @@ public class OpcLoader : MonoBehaviour
     // 共有点プールの容量（点数）。Start時にファイル情報と予算から自動算出される。
     private int _pointPoolCapacity;
 
-    // 開いたOPCファイル（ヘッダ+ノード索引）。読み込み失敗時はnullのまま。
+    // 開いたOPCファイル（ヘッダ+統合ノード索引）。読み込み失敗時はnullのまま。
     private OpcFile _file;
     private OpcFile.Header _header;
-    private List<OpcFile.Branch> _branches = new List<OpcFile.Branch>();
-    private List<OpcFile.Leaf> _leaves = new List<OpcFile.Leaf>();
+    private OpcFile.Node[] _nodes;
     private long _bodyStart = -1;
-    private int _rootBranchIndex = -1;
     private Camera _mainCamera;
-    private List<int> _visibleLeafIndices = new List<int>();
-    private List<int> _visibleBranchIndices = new List<int>();
     private List<VisibleNode> _visibleNodes = new List<VisibleNode>();
+    private List<int> _visibleNodeIndices = new List<int>();
     private List<uint> _desiredCounts = new List<uint>();
     private List<uint> _finalAllocs = new List<uint>();
     private List<int> _activeIndices = new List<int>();
-    private Queue<int> _branchIndicesToCheck = new Queue<int>();
-    private List<NodeState> _leafStates = new List<NodeState>();
-    private List<NodeState> _branchStates = new List<NodeState>();
-    private List<int> _loadedLeafIndices = new List<int>();
-    private List<int> _loadedBranchIndices = new List<int>();
+    private Queue<int> _nodeIndicesToCheck = new Queue<int>();
+    private List<NodeState> _nodeStates = new List<NodeState>();
+    private List<int> _loadedNodeIndices = new List<int>();
     private List<VisibleNode> _pendingLoads = new List<VisibleNode>();
     private GraphicsBuffer _quadIndex;
     private MaterialPropertyBlock _mpb;
@@ -128,12 +123,9 @@ public class OpcLoader : MonoBehaviour
         }
 
         _header = _file.FileHeader;
-        _branches = _file.Branches;
-        _leaves = _file.Leaves;
+        _nodes = _file.Nodes;
         _bodyStart = _file.BodyStart;
-        _rootBranchIndex = _file.RootBranchIndex;
-        _leafStates = CreateNodeStates(_leaves.Count);
-        _branchStates = CreateNodeStates(_branches.Count);
+        _nodeStates = CreateNodeStates(_nodes.Length);
         CreateLoadWorker();
         SetupRendering();
     }
@@ -141,12 +133,8 @@ public class OpcLoader : MonoBehaviour
     // 点データ読み込み用のワーカースレッドを起動する
     private void CreateLoadWorker()
     {
-        // 全ノード中の最大点数を求める（ワーカー内プールの配列サイズ上限を決めるため）
-        int maxPointCount = 1024;
-        foreach (OpcFile.Branch branch in _branches)
-            maxPointCount = Math.Max(maxPointCount, (int)branch.pointCount);
-        foreach (OpcFile.Leaf leaf in _leaves)
-            maxPointCount = Math.Max(maxPointCount, (int)leaf.pointCount);
+        // ワーカー内プールの配列サイズ上限は全ノード中の最大点数（極小ファイルでも最低限は確保する）
+        int maxPointCount = Math.Max(1024, _file.MaxNodePointCount);
 
         _loadWorker = new OpcPointLoadWorker(GetFullPath(_filePath), _header.pointStrideBytes, maxPointCount);
     }
@@ -194,7 +182,7 @@ public class OpcLoader : MonoBehaviour
         _pointPoolAllocator = new PointPoolAllocator(_pointPoolCapacity);
 
         // マルチドロー用のコマンドバッファとノード描画データバッファを作成（最大数=全ノード数）
-        int maxNodes = _branches.Count + _leaves.Count;
+        int maxNodes = _nodes.Length;
         _commandBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, maxNodes, GraphicsBuffer.IndirectDrawIndexedArgs.size);
         _nodeDataBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, maxNodes, System.Runtime.InteropServices.Marshal.SizeOf<NodeDrawData>());
         _commandArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[maxNodes];
@@ -228,7 +216,7 @@ public class OpcLoader : MonoBehaviour
     {
         // 初期化
         _visibleNodes.Clear();
-        _branchIndicesToCheck.Clear();
+        _nodeIndicesToCheck.Clear();
 
         // カメラの視錐台平面
         GeometryUtility.CalculateFrustumPlanes(_mainCamera, _planes);
@@ -241,66 +229,44 @@ public class OpcLoader : MonoBehaviour
         _minDepth = _mainCamera.nearClipPlane + 1e-3f;
         _maxAreaPx = (float)Screen.width * Screen.height;
 
-        // ルートブランチを追加
-        _branchIndicesToCheck.Enqueue(_rootBranchIndex);
+        // ルートノードを追加
+        _nodeIndicesToCheck.Enqueue(_file.RootIndex);
 
         // 探索ループ
-        while (_branchIndicesToCheck.Count > 0)
+        while (_nodeIndicesToCheck.Count > 0)
         {
-            // 処理対象の枝を取得
-            int branchIndex = _branchIndicesToCheck.Dequeue();
-            OpcFile.Branch branch = _branches[branchIndex];
+            // 処理対象のノードを取得
+            int nodeIndex = _nodeIndicesToCheck.Dequeue();
+            OpcFile.Node node = _nodes[nodeIndex];
 
-            // 枝が見えているか
-            if (!GeometryUtility.TestPlanesAABB(_planes, branch.bounds))
+            // ノードが見えているか
+            if (!GeometryUtility.TestPlanesAABB(_planes, node.bounds))
             {
                 // 子の判定をスキップ
                 continue;
             }
 
-            // 枝の代表点で十分なら止める（子に降りない）
-            if (CanStopAtBranch(branch))
+            // 代表点では足りない枝は子へ降りる
+            if (!node.isLeaf && !CanStopAtBranch(node))
             {
-                _visibleNodes.Add(new VisibleNode
+                for (int i = 0; i < 8; i++)
                 {
-                    index = branchIndex,
-                    isLeaf = false,
-                    pointCount = branch.pointCount,
-                    areaPx = ComputeAreaPx(branch.bounds),
-                });
+                    int childIndex = _file.ChildIndices[node.childStart + i];
+                    if (childIndex >= 0)
+                    {
+                        _nodeIndicesToCheck.Enqueue(childIndex);
+                    }
+                }
                 continue;
             }
 
-            // 見えている子のノードを確認
-            for (int i = 0; i < branch.references.Length; i++)
+            // 葉、または代表点で足りる枝は描画候補に追加
+            _visibleNodes.Add(new VisibleNode
             {
-                OpcFile.NodeReference nodeRef = branch.references[i];
-
-                // 存在しているか
-                if (!nodeRef.IsValid) continue;
-
-                // ノードは葉か
-                if (nodeRef.isLeaf)
-                {
-                    // 見えている場合は候補リストに追加
-                    OpcFile.Leaf leaf = _leaves[nodeRef.index];
-                    if (GeometryUtility.TestPlanesAABB(_planes, leaf.bounds))
-                    {
-                        _visibleNodes.Add(new VisibleNode
-                        {
-                            index = nodeRef.index,
-                            isLeaf = true,
-                            pointCount = leaf.pointCount,
-                            areaPx = ComputeAreaPx(leaf.bounds),
-                        });
-                    }
-                }
-                else
-                {
-                    // 探索対象として追加
-                    _branchIndicesToCheck.Enqueue(nodeRef.index);
-                }
-            }
+                index = nodeIndex,
+                pointCount = node.pointCount,
+                areaPx = ComputeAreaPx(node.bounds),
+            });
         }
 
         // Point Budgetを適用して描画対象を決定
@@ -330,8 +296,7 @@ public class OpcLoader : MonoBehaviour
     private void ApplyPointBudget()
     {
         // 描画対象リスト / 各種バッファを初期化
-        _visibleLeafIndices.Clear();
-        _visibleBranchIndices.Clear();
+        _visibleNodeIndices.Clear();
         _desiredCounts.Clear();
         _finalAllocs.Clear();
         _activeIndices.Clear();
@@ -367,19 +332,11 @@ public class OpcLoader : MonoBehaviour
             uint alloc = _finalAllocs[i];
             if (alloc > node.pointCount) alloc = node.pointCount;
 
-            // 種別ごとにNodeStateへ反映し描画対象リストに追加
-            if (node.isLeaf)
-            {
-                _leafStates[node.index].drawCount = alloc;
-                _leafStates[node.index].areaPx = node.areaPx;
-                _visibleLeafIndices.Add(node.index);
-            }
-            else
-            {
-                _branchStates[node.index].drawCount = alloc;
-                _branchStates[node.index].areaPx = node.areaPx;
-                _visibleBranchIndices.Add(node.index);
-            }
+            // NodeStateへ反映し描画対象リストに追加
+            NodeState state = _nodeStates[node.index];
+            state.drawCount = alloc;
+            state.areaPx = node.areaPx;
+            _visibleNodeIndices.Add(node.index);
         }
     }
 
@@ -458,19 +415,19 @@ public class OpcLoader : MonoBehaviour
         }
     }
 
-    private bool CanStopAtBranch(OpcFile.Branch branch)
+    private bool CanStopAtBranch(OpcFile.Node node)
     {
         // 代表点が無い枝は止められない
-        if (branch.pointCount == 0) return false;
+        if (node.pointCount == 0) return false;
 
         // 画面ピクセル面積
-        float areaPx = ComputeAreaPx(branch.bounds);
+        float areaPx = ComputeAreaPx(node.bounds);
 
         // 画面に必要な点数（面積 × 1ピクセル当たりの目標点数）
         float requiredCount = areaPx * _maxPointsPerPixel;
 
         // 枝の代表点が必要点数を満たすなら、葉に降りなくてよい
-        return branch.pointCount >= requiredCount;
+        return node.pointCount >= requiredCount;
     }
 
     private void SyncNodeStreaming()
@@ -479,35 +436,18 @@ public class OpcLoader : MonoBehaviour
 
         // 未ロード候補を集める（lastWantedFrame は見えている全ノードに対して更新）
         _pendingLoads.Clear();
-        foreach (int leafIndex in _visibleLeafIndices)
+        foreach (int nodeIndex in _visibleNodeIndices)
         {
-            NodeState state = _leafStates[leafIndex];
+            NodeState state = _nodeStates[nodeIndex];
             state.lastWantedFrame = frame;
             if (state.isLoading) continue;
 
             // ロード済みでも描画必要数がロード済み点数を超えたら追加ロード（全点ロード済みなら不要）
-            if (state.isLoaded && !NeedsMorePoints(state, _leaves[leafIndex].pointCount)) continue;
+            if (state.isLoaded && !NeedsMorePoints(state, _nodes[nodeIndex].pointCount)) continue;
 
             _pendingLoads.Add(new VisibleNode
             {
-                index = leafIndex,
-                isLeaf = true,
-                areaPx = state.areaPx,
-            });
-        }
-        foreach (int branchIndex in _visibleBranchIndices)
-        {
-            NodeState state = _branchStates[branchIndex];
-            state.lastWantedFrame = frame;
-            if (state.isLoading) continue;
-
-            // ロード済みでも描画必要数がロード済み点数を超えたら追加ロード（全点ロード済みなら不要）
-            if (state.isLoaded && !NeedsMorePoints(state, _branches[branchIndex].pointCount)) continue;
-
-            _pendingLoads.Add(new VisibleNode
-            {
-                index = branchIndex,
-                isLeaf = false,
+                index = nodeIndex,
                 areaPx = state.areaPx,
             });
         }
@@ -520,32 +460,18 @@ public class OpcLoader : MonoBehaviour
         int requestLimit = Mathf.Min(_pendingLoads.Count, _maxLoadsPerFrame);
         for (int i = 0; i < requestLimit; i++)
         {
-            VisibleNode node = _pendingLoads[i];
-            if (node.isLeaf) RequestLeafLoad(node.index);
-            else RequestBranchLoad(node.index);
+            RequestNodeLoad(_pendingLoads[i].index);
         }
 
-        // Leaf アンロード（後ろから走査: 内部でリストから削除されるため）
-        for (int i = _loadedLeafIndices.Count - 1; i >= 0; i--)
+        // アンロード（後ろから走査: 内部でリストから削除されるため）
+        for (int i = _loadedNodeIndices.Count - 1; i >= 0; i--)
         {
-            int leafIndex = _loadedLeafIndices[i];
-            NodeState state = _leafStates[leafIndex];
+            int nodeIndex = _loadedNodeIndices[i];
+            NodeState state = _nodeStates[nodeIndex];
 
             if (frame - state.lastWantedFrame > _unloadDelayFrames)
             {
-                UnloadLeafPoints(leafIndex);
-            }
-        }
-
-        // Branch アンロード
-        for (int i = _loadedBranchIndices.Count - 1; i >= 0; i--)
-        {
-            int branchIndex = _loadedBranchIndices[i];
-            NodeState state = _branchStates[branchIndex];
-
-            if (frame - state.lastWantedFrame > _unloadDelayFrames)
-            {
-                UnloadBranchPoints(branchIndex);
+                UnloadNodePoints(nodeIndex);
             }
         }
     }
@@ -564,36 +490,21 @@ public class OpcLoader : MonoBehaviour
         return (int)Math.Min(desired, nodePointCount);
     }
 
-    private void RequestLeafLoad(int leafIndex)
+    private void RequestNodeLoad(int nodeIndex)
     {
-        OpcFile.Leaf leaf = _leaves[leafIndex];
-        NodeState state = _leafStates[leafIndex];
+        OpcFile.Node node = _nodes[nodeIndex];
+        NodeState state = _nodeStates[nodeIndex];
 
         // ロード中フラグを立ててワーカーへ要求を積む（先頭から必要分だけ読む）
         state.isLoading = true;
-        EnqueueLoadRequest(leafIndex, true, leaf.baseOffset, ComputeLoadCount(state.drawCount, leaf.pointCount));
-    }
 
-    private void RequestBranchLoad(int branchIndex)
-    {
-        OpcFile.Branch branch = _branches[branchIndex];
-        NodeState state = _branchStates[branchIndex];
-
-        // ロード中フラグを立ててワーカーへ要求を積む（先頭から必要分だけ読む）
-        state.isLoading = true;
-        EnqueueLoadRequest(branchIndex, false, branch.baseOffset, ComputeLoadCount(state.drawCount, branch.pointCount));
-    }
-
-    private void EnqueueLoadRequest(int index, bool isLeaf, ulong baseOffset, int count)
-    {
         // ファイル先頭からのシーク位置を計算してワーカーへ渡す
-        long seekPos = _bodyStart + (long)(baseOffset * (ulong)_header.pointStrideBytes);
+        long seekPos = _bodyStart + (long)(node.baseOffset * (ulong)_header.pointStrideBytes);
         _loadWorker.Enqueue(new OpcPointLoadWorker.LoadRequest
         {
-            index = index,
-            isLeaf = isLeaf,
+            index = nodeIndex,
             seekPos = seekPos,
-            count = count,
+            count = ComputeLoadCount(state.drawCount, node.pointCount),
         });
     }
 
@@ -605,7 +516,7 @@ public class OpcLoader : MonoBehaviour
         int uploaded = 0;
         while (uploaded < _maxLoadsPerFrame && _loadWorker.TryDequeue(out OpcPointLoadWorker.LoadResult result))
         {
-            NodeState state = result.isLeaf ? _leafStates[result.index] : _branchStates[result.index];
+            NodeState state = _nodeStates[result.index];
             state.isLoading = false;
 
             // 読み込み中に不要になったノードは破棄（GPUバッファを作らない）
@@ -616,9 +527,8 @@ public class OpcLoader : MonoBehaviour
             }
 
             // 共有プールへ点データをアップロード（追加ロード時は内部で旧領域を解放して差し替え）
-            Bounds bounds = result.isLeaf ? _leaves[result.index].bounds : _branches[result.index].bounds;
             bool wasLoaded = state.isLoaded;
-            bool uploadSucceeded = UploadNodePoints(state, result.packed, result.count, bounds);
+            bool uploadSucceeded = UploadNodePoints(state, result.packed, result.count, _nodes[result.index].bounds);
             _loadWorker.ReturnPacked(result.packed);
 
             // プール満杯で確保できなかったノードは見送る（ロード済みなら旧データのまま描画継続）
@@ -628,8 +538,7 @@ public class OpcLoader : MonoBehaviour
             state.isLoaded = true;
             if (!wasLoaded)
             {
-                if (result.isLeaf) _loadedLeafIndices.Add(result.index);
-                else _loadedBranchIndices.Add(result.index);
+                _loadedNodeIndices.Add(result.index);
             }
             uploaded++;
         }
@@ -688,13 +597,8 @@ public class OpcLoader : MonoBehaviour
     // 部分ロードの必要量（≈ 予算×先読み係数 + 視界外残留分）を賄える係数を予算に掛け、ファイル内の全実点数を上限とする。
     private int ComputePointPoolCapacity()
     {
-        // ファイル内の全ノードの実点数合計（プールがこれ以上必要になることはない）
-        long totalNodePoints = 0;
-        foreach (OpcFile.Branch branch in _branches) totalNodePoints += branch.pointCount;
-        foreach (OpcFile.Leaf leaf in _leaves) totalNodePoints += leaf.pointCount;
-
         // 小さいファイルは全点数ぴったり、大きいファイルは予算×係数で頭打ち
-        long capacity = Math.Min(totalNodePoints, (long)PoolCapacityBudgetMultiplier * _pointBudget);
+        long capacity = Math.Min(_file.TotalNodePoints, (long)PoolCapacityBudgetMultiplier * _pointBudget);
         capacity = Math.Min(capacity, int.MaxValue);
 
         Debug.Log($"OpcLoader: 点プール容量を {capacity:N0} 点（約 {capacity * 12 / (1024 * 1024)} MB）に自動設定しました。");
@@ -707,9 +611,9 @@ public class OpcLoader : MonoBehaviour
         return ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
     }
 
-    private void UnloadLeafPoints(int leafIndex)
+    private void UnloadNodePoints(int nodeIndex)
     {
-        NodeState state = _leafStates[leafIndex];
+        NodeState state = _nodeStates[nodeIndex];
 
         // ロード済みでなければ何もしない
         if (!state.isLoaded) return;
@@ -717,20 +621,7 @@ public class OpcLoader : MonoBehaviour
         FreeNodePoints(state);
 
         // ロード済みリストから削除
-        _loadedLeafIndices.Remove(leafIndex);
-    }
-
-    private void UnloadBranchPoints(int branchIndex)
-    {
-        NodeState state = _branchStates[branchIndex];
-
-        // ロード済みでなければ何もしない
-        if (!state.isLoaded) return;
-
-        FreeNodePoints(state);
-
-        // ロード済みリストから削除
-        _loadedBranchIndices.Remove(branchIndex);
+        _loadedNodeIndices.Remove(nodeIndex);
     }
 
     // 今フレーム見えていないロード済みノードを解放してプールに空きを作る（メモリ圧迫時の早期アンロード）
@@ -739,20 +630,12 @@ public class OpcLoader : MonoBehaviour
         int frame = Time.frameCount;
 
         // 後ろから走査（内部でロード済みリストから削除されるため）
-        for (int i = _loadedLeafIndices.Count - 1; i >= 0; i--)
+        for (int i = _loadedNodeIndices.Count - 1; i >= 0; i--)
         {
-            int leafIndex = _loadedLeafIndices[i];
-            if (_leafStates[leafIndex].lastWantedFrame < frame)
+            int nodeIndex = _loadedNodeIndices[i];
+            if (_nodeStates[nodeIndex].lastWantedFrame < frame)
             {
-                UnloadLeafPoints(leafIndex);
-            }
-        }
-        for (int i = _loadedBranchIndices.Count - 1; i >= 0; i--)
-        {
-            int branchIndex = _loadedBranchIndices[i];
-            if (_branchStates[branchIndex].lastWantedFrame < frame)
-            {
-                UnloadBranchPoints(branchIndex);
+                UnloadNodePoints(nodeIndex);
             }
         }
     }
@@ -774,13 +657,9 @@ public class OpcLoader : MonoBehaviour
     {
         // ロード済みノードの描画コマンドとノード描画データを詰める
         int commandCount = 0;
-        foreach (int leafIndex in _loadedLeafIndices)
+        foreach (int nodeIndex in _loadedNodeIndices)
         {
-            commandCount = AppendDrawCommand(_leafStates[leafIndex], commandCount);
-        }
-        foreach (int branchIndex in _loadedBranchIndices)
-        {
-            commandCount = AppendDrawCommand(_branchStates[branchIndex], commandCount);
+            commandCount = AppendDrawCommand(_nodeStates[nodeIndex], commandCount);
         }
 
         // 描画対象が無ければ何もしない
@@ -894,13 +773,9 @@ public class OpcLoader : MonoBehaviour
 
     private void UnloadAllNodes()
     {
-        for (int i = 0; i < _leafStates.Count; i++)
+        for (int i = 0; i < _nodeStates.Count; i++)
         {
-            UnloadLeafPoints(i);
-        }
-        for (int i = 0; i < _branchStates.Count; i++)
-        {
-            UnloadBranchPoints(i);
+            UnloadNodePoints(i);
         }
     }
 
@@ -948,7 +823,6 @@ public class OpcLoader : MonoBehaviour
     private struct VisibleNode
     {
         public int index;
-        public bool isLeaf;
         public uint pointCount;
         public float areaPx;
     }
