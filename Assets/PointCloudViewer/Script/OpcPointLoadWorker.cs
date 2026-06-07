@@ -27,6 +27,9 @@ public class OpcPointLoadWorker : IDisposable
         public PackedPoint12[] packed;
         public int count;
 
+        // 要求された点数（count < requestedCount ならファイルが要求分に足りなかった）
+        public int requestedCount;
+
         // 読み込みに失敗したら true（packed は null。呼び出し側はロード中フラグだけ解除する）
         public bool failed;
     }
@@ -154,6 +157,7 @@ public class OpcPointLoadWorker : IDisposable
             index = request.index,
             packed = packed,
             count = actualCount,
+            requestedCount = request.count,
         };
     }
 
