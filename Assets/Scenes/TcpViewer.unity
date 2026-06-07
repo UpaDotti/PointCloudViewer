@@ -190,6 +190,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::BenchmarkSession
   _captureFps: 60
   _warmupFrames: 30
+  _markerNames:
+  - OpcLoader.GetVisibleNodes
+  - OpcLoader.SyncNodeStreaming
+  - OpcLoader.DrawPointCloud
 --- !u!114 &809290258
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -364,9 +368,9 @@ MonoBehaviour:
   _pointMaterial: {fileID: 2100000, guid: 98fc76e6e3a384249b3f5ce8eb3a0793, type: 2}
   _minPixelSize: 0.1
   _maxPixelSize: 8
-  _pointSizeScale: 1
+  _pointSizeScale: 0.5
   _maxPointsPerPixel: 1
-  _pointBudget: 2000000
+  _pointBudget: 4000000
   _maxLoadsPerFrame: 10
   _unloadDelayFrames: 30
 --- !u!4 &1022487359
