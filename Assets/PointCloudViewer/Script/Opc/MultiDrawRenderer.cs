@@ -61,8 +61,29 @@ public class MultiDrawRenderer : IDisposable
         _nodeDrawData = new NodeDrawData[maxNodes];
     }
 
-    /// <summary>ロード済みノードを1回のマルチドローで描画する</summary>
+    // 分割描画パスが使うアクセサ（CommandBufferからノード毎に発行するため）
+    /// <summary>全ノード共通パラメータを設定済みのMaterialPropertyBlock（Prepare後に有効）</summary>
+    public MaterialPropertyBlock MaterialProperties => _mpb;
+
+    /// <summary>点1つを表すQuadのインデックスバッファ</summary>
+    public GraphicsBuffer QuadIndex => _quadIndex;
+
+    /// <summary>コマンドindexのノードが描く点数（先頭からこの数だけ描く）</summary>
+    public int GetInstanceCount(int commandIndex) => (int)_commandArgs[commandIndex].instanceCount;
+
+    /// <summary>ロード済みノードを1回のマルチドローでカメラへ直接描画する</summary>
     public void Draw(PointStreamer streamer, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
+    {
+        int commandCount = Prepare(streamer, camera, minPixelSize, maxPixelSize, pointSizeScale);
+        if (commandCount == 0) return;
+        DrawDirect(commandCount);
+    }
+
+    /// <summary>
+    /// 描画コマンドとノード描画データを詰めてGPUへ転送し、共通パラメータを設定する。
+    /// 実際の描画は行わず、コマンド数を返す（直接描画/分割描画の両方の前段で使う）。
+    /// </summary>
+    public int Prepare(PointStreamer streamer, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
     {
         // ロード済みノードの描画コマンドとノード描画データを詰める
         int commandCount = 0;
@@ -72,8 +93,8 @@ public class MultiDrawRenderer : IDisposable
             commandCount = AppendDrawCommand(streamer, loadedNodeIndices[i], pointSizeScale, commandCount);
         }
 
-        // 描画対象が無ければ何もしない
-        if (commandCount == 0) return;
+        // 描画対象が無ければ転送もしない
+        if (commandCount == 0) return 0;
 
         // 今フレーム分のコマンドとノード描画データをGPUへ転送
         _commandBuffer.SetData(_commandArgs, 0, 0, commandCount);
@@ -88,6 +109,12 @@ public class MultiDrawRenderer : IDisposable
         _mpb.SetFloat(_maxPixelSizeId, maxPixelSize);
         _rp.matProps = _mpb;
 
+        return commandCount;
+    }
+
+    /// <summary>Prepareで詰めたコマンドを1回のマルチドローでカメラへ直接描画する</summary>
+    public void DrawDirect(int commandCount)
+    {
         // 全ノードを1回のマルチドローで描画
         Graphics.RenderPrimitivesIndexedIndirect(
             _rp,

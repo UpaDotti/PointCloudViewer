@@ -137,7 +137,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &809290255
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -366,9 +366,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::OpcLoader
   _filePath: Assets/sample.opc
   _pointMaterial: {fileID: 2100000, guid: 98fc76e6e3a384249b3f5ce8eb3a0793, type: 2}
+  _useSplitRender: 1
   _minPixelSize: 0.1
   _maxPixelSize: 8
-  _pointSizeScale: 0.5
+  _pointSizeScale: 0.7
   _maxPointsPerPixel: 1
   _pointBudget: 4000000
   _maxLoadsPerFrame: 10

@@ -18,6 +18,10 @@ public class OpcLoader : MonoBehaviour
     [SerializeField]
     private Material _pointMaterial;
 
+    // 分割描画（RendererFeature経由でRTへ描く）を使うか。OFFなら従来どおりカメラへ直接描画する。
+    [SerializeField]
+    private bool _useSplitRender = false;
+
     [Header("Point Size")]
     [SerializeField]
     private float _minPixelSize = 0.1f;
@@ -105,7 +109,20 @@ public class OpcLoader : MonoBehaviour
         // 点群を描画
         using (_markerDrawPointCloud.Auto())
         {
-            _renderer.Draw(_streamer, _cameraState, _minPixelSize, _maxPixelSize, _pointSizeScale);
+            if (_useSplitRender)
+            {
+                // 分割描画: コマンドを詰めてBridge経由でRendererFeatureへ渡す（実描画はPassが行う）
+                int commandCount = _renderer.Prepare(_streamer, _cameraState, _minPixelSize, _maxPixelSize, _pointSizeScale);
+                OpcSplitRenderBridge.Active = true;
+                OpcSplitRenderBridge.Renderer = _renderer;
+                OpcSplitRenderBridge.CommandCount = commandCount;
+            }
+            else
+            {
+                // 直接描画: 従来どおりカメラへマルチドロー
+                OpcSplitRenderBridge.Active = false;
+                _renderer.Draw(_streamer, _cameraState, _minPixelSize, _maxPixelSize, _pointSizeScale);
+            }
         }
     }
 
@@ -142,6 +159,11 @@ public class OpcLoader : MonoBehaviour
 
     private void Cleanup()
     {
+        // 分割描画を止め、破棄するレンダラーをRendererFeature側が参照しないようにする
+        OpcSplitRenderBridge.Active = false;
+        OpcSplitRenderBridge.Renderer = null;
+        OpcSplitRenderBridge.CommandCount = 0;
+
         // ストリーマを先に止める（停止後に新しい結果が出ないようにする）
         _streamer?.Dispose();
         _streamer = null;
