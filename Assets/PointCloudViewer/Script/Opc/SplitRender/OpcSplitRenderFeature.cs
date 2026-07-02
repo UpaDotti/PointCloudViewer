@@ -230,7 +230,7 @@ public class OpcSplitRenderPass : ScriptableRenderPass
 
                 builder.UseTexture(sliceColor, AccessFlags.Read);
                 builder.UseTexture(sliceDepth, AccessFlags.Read);
-                builder.SetRenderAttachment(activeColor, 0, AccessFlags.Write);
+                builder.SetRenderAttachment(activeColor, 0, AccessFlags.ReadWrite);
                 builder.SetRenderAttachmentDepth(compositeDepth, AccessFlags.Write);
                 builder.AllowPassCulling(false);
 
@@ -275,7 +275,7 @@ public class OpcSplitRenderPass : ScriptableRenderPass
         // 最初の有効スライスで画面と合成深度をクリア
         if (data.clearFirst)
         {
-            cmd.ClearRenderTarget(RTClearFlags.All, Color.clear, 1f, 0);
+            cmd.ClearRenderTarget(RTClearFlags.Depth, Color.clear, 1f, 0);
         }
 
         // フルスクリーン三角形（3頂点）でスライスを合成
