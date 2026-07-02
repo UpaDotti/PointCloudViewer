@@ -45,6 +45,11 @@ public class OpcLoader : MonoBehaviour
     [SerializeField]
     private int _unloadDelayFrames = 30;
 
+    [Header("Fallback")]
+    [SerializeField]
+    [Range(0.25f, 2.0f)]
+    private float _fallbackQuality = 1.0f;
+
     // 共有点プール容量の自動算出に使う余裕係数（部分ロードの必要量 ≈ 予算×先読み係数 に視界外残留分の余裕を加える）
     private const int PoolCapacityBudgetMultiplier = 4;
 
@@ -87,7 +92,17 @@ public class OpcLoader : MonoBehaviour
         // 各部品を組み立てる（依存は LodSelector / Streamer / Renderer → File / Pool の一方向）
         _lodSelector = new NodeLodSelector(_file, _maxPointsPerPixel);
         _pointPool = new GpuPointPool(ComputePointPoolCapacity());
-        _streamer = new PointStreamer(_file, GetFullPath(_filePath), _pointPool, _maxLoadsPerFrame, _unloadDelayFrames);
+        _streamer = new PointStreamer(
+            _file,
+            GetFullPath(_filePath),
+            _pointPool,
+            new PointStreamer.Options
+            {
+                maxLoadsPerFrame = _maxLoadsPerFrame,
+                unloadDelayFrames = _unloadDelayFrames,
+                fallbackQuality = _fallbackQuality,
+            }
+        );
         _renderer = new MultiDrawRenderer(_pointMaterial, _file, _pointPool);
     }
 
@@ -112,7 +127,7 @@ public class OpcLoader : MonoBehaviour
             if (_useSplitRender)
             {
                 // 分割描画: コマンドを詰めてBridge経由でRendererFeatureへ渡す（実描画はPassが行う）
-                int commandCount = _renderer.Prepare(_streamer, _cameraState, _minPixelSize, _maxPixelSize, _pointSizeScale);
+                int commandCount = _renderer.Prepare(_streamer, _selections, _cameraState, _minPixelSize, _maxPixelSize, _pointSizeScale);
                 OpcSplitRenderBridge.Active = true;
                 OpcSplitRenderBridge.Renderer = _renderer;
                 OpcSplitRenderBridge.CommandCount = commandCount;
@@ -121,7 +136,7 @@ public class OpcLoader : MonoBehaviour
             {
                 // 直接描画: 従来どおりカメラへマルチドロー
                 OpcSplitRenderBridge.Active = false;
-                _renderer.Draw(_streamer, _cameraState, _minPixelSize, _maxPixelSize, _pointSizeScale);
+                _renderer.Draw(_streamer, _selections, _cameraState, _minPixelSize, _maxPixelSize, _pointSizeScale);
             }
         }
     }

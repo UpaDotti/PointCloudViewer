@@ -17,6 +17,13 @@ public struct NodeSelection
 /// </summary>
 public class PointStreamer : IDisposable
 {
+    public struct Options
+    {
+        public int maxLoadsPerFrame;
+        public int unloadDelayFrames;
+        public float fallbackQuality;
+    }
+
     /// <summary>ノードの常駐状態</summary>
     public enum ResidencyState : byte
     {
@@ -69,6 +76,10 @@ public class PointStreamer : IDisposable
 
     // 1ノードの最低ロード点数（drawCountが極小でも取り直しが頻発しない程度を確保する）
     private const int MinLoadCount = 1024;
+    private const float BaseFallbackPointsPerPixel = 0.35f;
+    private const int BaseFallbackMaxDrawCount = 65_536;
+    private const float FallbackLoadPriority = 2.0f;
+    private const int FallbackAncestorLevels = 2;
 
     // プール満杯やファイル不足でロードを見送ったノードの再要求間隔（毎フレームの取り直しを防ぐ）
     private const int RetryDelayFrames = 30;
@@ -78,24 +89,31 @@ public class PointStreamer : IDisposable
     private readonly OpcPointLoadWorker _worker;
     private readonly int _maxLoadsPerFrame;
     private readonly int _unloadDelayFrames;
+    private readonly float _fallbackPointsPerPixel;
+    private readonly int _fallbackMaxDrawCount;
 
     private readonly NodeResidency[] _residency;
     private readonly List<int> _loadedNodeIndices = new List<int>();
     private readonly List<PendingLoad> _pendingLoads = new List<PendingLoad>();
+    private readonly HashSet<int> _pendingNodeIndices = new HashSet<int>();
     private bool _poolFullWarned;
 
     // GPUアップロードの所要時間（1フレーム分を合算してベンチマークに記録する）
     private double _frameGpuUploadMs;
 
-    /// <summary>プールにデータを持っているノードのインデックス一覧（描画側が走査する）</summary>
-    public IReadOnlyList<int> LoadedNodeIndices => _loadedNodeIndices;
-
-    public PointStreamer(OpcFile file, string fullPath, GpuPointPool pool, int maxLoadsPerFrame, int unloadDelayFrames)
+    public PointStreamer(
+        OpcFile file,
+        string fullPath,
+        GpuPointPool pool,
+        Options options)
     {
         _file = file;
         _pool = pool;
-        _maxLoadsPerFrame = maxLoadsPerFrame;
-        _unloadDelayFrames = unloadDelayFrames;
+        _maxLoadsPerFrame = options.maxLoadsPerFrame;
+        _unloadDelayFrames = options.unloadDelayFrames;
+        float fallbackQuality = Mathf.Clamp(options.fallbackQuality, 0.25f, 2.0f);
+        _fallbackPointsPerPixel = BaseFallbackPointsPerPixel * fallbackQuality;
+        _fallbackMaxDrawCount = Math.Max(MinLoadCount, Mathf.RoundToInt(BaseFallbackMaxDrawCount * fallbackQuality));
 
         // 常駐情報を初期化（poolStart=-1 がデータ無し）
         _residency = new NodeResidency[file.Nodes.Length];
@@ -108,12 +126,38 @@ public class PointStreamer : IDisposable
         // 点データ読み込み用のワーカースレッドを起動する（極小ファイルでも最低限のバッファは確保する）
         int maxPointCount = Math.Max(1024, file.MaxNodePointCount);
         _worker = new OpcPointLoadWorker(fullPath, file.FileHeader.pointStrideBytes, maxPointCount);
+
+        PreloadRootFallback();
     }
 
     /// <summary>ノードの常駐情報を取得する（描画側がpoolStart/loadedCount/drawCountを参照する）</summary>
     public NodeResidency GetResidency(int nodeIndex)
     {
         return _residency[nodeIndex];
+    }
+
+    public bool TryResolveDrawableNode(int nodeIndex, out int drawableNodeIndex)
+    {
+        if (_residency[nodeIndex].HasData)
+        {
+            drawableNodeIndex = nodeIndex;
+            return true;
+        }
+
+        int parentIndex = _file.ParentIndices[nodeIndex];
+        while (parentIndex >= 0)
+        {
+            if (_residency[parentIndex].HasData)
+            {
+                drawableNodeIndex = parentIndex;
+                return true;
+            }
+
+            parentIndex = _file.ParentIndices[parentIndex];
+        }
+
+        drawableNodeIndex = -1;
+        return false;
     }
 
     /// <summary>
@@ -151,6 +195,7 @@ public class PointStreamer : IDisposable
     private void CollectPendingLoads(List<NodeSelection> selections, int frame)
     {
         _pendingLoads.Clear();
+        _pendingNodeIndices.Clear();
 
         for (int i = 0; i < selections.Count; i++)
         {
@@ -161,6 +206,8 @@ public class PointStreamer : IDisposable
             res.drawCount = selection.drawCount;
             res.lastWantedFrame = frame;
 
+            KeepFallbackAncestorsWarm(selection, frame);
+
             // 結果待ち中は次の要求を出さない
             if (res.state == ResidencyState.Loading || res.state == ResidencyState.Refreshing) continue;
 
@@ -170,11 +217,77 @@ public class PointStreamer : IDisposable
             // 直前にプール満杯などで見送ったノードはクールダウン中は再要求しない
             if (frame < res.retryAfterFrame) continue;
 
-            _pendingLoads.Add(new PendingLoad { nodeIndex = selection.nodeIndex, areaPx = selection.areaPx });
+            AddPendingLoad(selection.nodeIndex, selection.areaPx);
         }
     }
 
+    private void KeepFallbackAncestorsWarm(NodeSelection selection, int frame)
+    {
+        int parentIndex = _file.ParentIndices[selection.nodeIndex];
+        int warmedLevels = 0;
+        while (parentIndex >= 0 && warmedLevels < FallbackAncestorLevels)
+        {
+            WarmFallbackNode(parentIndex, selection.areaPx, frame);
+            parentIndex = _file.ParentIndices[parentIndex];
+            warmedLevels++;
+        }
+
+        if (_file.RootIndex >= 0 && _file.RootIndex != selection.nodeIndex)
+        {
+            WarmFallbackNode(_file.RootIndex, selection.areaPx, frame);
+        }
+    }
+
+    private void WarmFallbackNode(int nodeIndex, float areaPx, int frame)
+    {
+        OpcFile.Node node = _file.Nodes[nodeIndex];
+        if (node.pointCount == 0) return;
+
+        ref NodeResidency res = ref _residency[nodeIndex];
+        uint fallbackDrawCount = GetFallbackDrawCount(areaPx, node.pointCount);
+        res.drawCount = Math.Max(res.drawCount, fallbackDrawCount);
+        res.lastWantedFrame = frame;
+
+        if (res.state == ResidencyState.Loading || res.state == ResidencyState.Refreshing) return;
+        if (res.state == ResidencyState.Resident && !NeedsMorePoints(res, node.pointCount)) return;
+        if (frame < res.retryAfterFrame) return;
+
+        AddPendingLoad(nodeIndex, areaPx * FallbackLoadPriority);
+    }
+
+    private void AddPendingLoad(int nodeIndex, float areaPx)
+    {
+        if (!_pendingNodeIndices.Add(nodeIndex)) return;
+        _pendingLoads.Add(new PendingLoad { nodeIndex = nodeIndex, areaPx = areaPx });
+    }
+
     // 描画必要数に対してロード済み点数が不足しているか（全点ロード済みなら常にfalse）
+    private void PreloadRootFallback()
+    {
+        int rootIndex = _file.RootIndex;
+        if (rootIndex < 0) return;
+
+        OpcFile.Node root = _file.Nodes[rootIndex];
+        if (root.pointCount == 0) return;
+
+        ref NodeResidency rootRes = ref _residency[rootIndex];
+        rootRes.drawCount = GetFallbackDrawCount(root.pointCount);
+        rootRes.lastWantedFrame = 0;
+        RequestLoad(rootIndex);
+    }
+
+    private uint GetFallbackDrawCount(uint nodePointCount)
+    {
+        return Math.Min((uint)_fallbackMaxDrawCount, nodePointCount);
+    }
+
+    private uint GetFallbackDrawCount(float areaPx, uint nodePointCount)
+    {
+        float targetCount = areaPx * _fallbackPointsPerPixel;
+        uint clamped = (uint)Mathf.Clamp(targetCount, MinLoadCount, _fallbackMaxDrawCount);
+        return Math.Min(clamped, nodePointCount);
+    }
+
     private static bool NeedsMorePoints(in NodeResidency res, uint nodePointCount)
     {
         if (res.loadedCount >= (int)nodePointCount) return false;

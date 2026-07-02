@@ -19,6 +19,7 @@ public class OpcFile
 
     // 枝ごとの子参照テーブル（枝1つにつき8スロット。-1は子なし）
     public int[] ChildIndices { get; private set; }
+    public int[] ParentIndices { get; private set; }
 
     // 点データ本体のファイル先頭からの開始位置
     public long BodyStart { get; private set; }
@@ -76,6 +77,7 @@ public class OpcFile
 
                 result.BodyStart = reader.BaseStream.Position;
                 result.ChildIndices = BuildChildIndices(result.Nodes, paths, branchCount);
+                result.ParentIndices = BuildParentIndices(paths);
                 result.RootIndex = FindRootIndex(result.Nodes, branchCount);
                 ComputePointStats(result);
 
@@ -225,6 +227,30 @@ public class OpcFile
         }
 
         return childIndices;
+    }
+
+    private static int[] BuildParentIndices(ulong[] paths)
+    {
+        var indexByPath = new Dictionary<ulong, int>(paths.Length);
+        for (int i = 0; i < paths.Length; i++)
+        {
+            indexByPath[paths[i]] = i;
+        }
+
+        int[] parentIndices = new int[paths.Length];
+        for (int i = 0; i < paths.Length; i++)
+        {
+            if (paths[i] == 0)
+            {
+                parentIndices[i] = -1;
+                continue;
+            }
+
+            ulong parentPath = paths[i] >> 3;
+            parentIndices[i] = indexByPath.TryGetValue(parentPath, out int parentIndex) ? parentIndex : -1;
+        }
+
+        return parentIndices;
     }
 
     private static int FindRootIndex(Node[] nodes, int branchCount)

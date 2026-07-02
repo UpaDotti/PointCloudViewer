@@ -374,6 +374,10 @@ MonoBehaviour:
   _pointBudget: 4000000
   _maxLoadsPerFrame: 10
   _unloadDelayFrames: 30
+  _frustumPaddingRatio: 0.1
+  _frustumPaddingMin: 0
+  _useCoarseBaseLayer: 1
+  _coarseBasePointBudget: 200000
 --- !u!4 &1022487359
 Transform:
   m_ObjectHideFlags: 0

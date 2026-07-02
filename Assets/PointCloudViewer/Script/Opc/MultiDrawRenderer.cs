@@ -19,6 +19,7 @@ public class MultiDrawRenderer : IDisposable
     private GraphicsBuffer _nodeDataBuffer;
     private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _commandArgs;
     private readonly NodeDrawData[] _nodeDrawData;
+    private readonly HashSet<int> _drawnNodeIndices = new HashSet<int>();
 
     // シェーダプロパティID（毎フレームの文字列ハッシュ計算を避ける）
     private static readonly int _pointsId = Shader.PropertyToID("_Points");
@@ -72,9 +73,9 @@ public class MultiDrawRenderer : IDisposable
     public int GetInstanceCount(int commandIndex) => (int)_commandArgs[commandIndex].instanceCount;
 
     /// <summary>ロード済みノードを1回のマルチドローでカメラへ直接描画する</summary>
-    public void Draw(PointStreamer streamer, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
+    public void Draw(PointStreamer streamer, List<NodeSelection> selections, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
     {
-        int commandCount = Prepare(streamer, camera, minPixelSize, maxPixelSize, pointSizeScale);
+        int commandCount = Prepare(streamer, selections, camera, minPixelSize, maxPixelSize, pointSizeScale);
         if (commandCount == 0) return;
         DrawDirect(commandCount);
     }
@@ -83,14 +84,14 @@ public class MultiDrawRenderer : IDisposable
     /// 描画コマンドとノード描画データを詰めてGPUへ転送し、共通パラメータを設定する。
     /// 実際の描画は行わず、コマンド数を返す（直接描画/分割描画の両方の前段で使う）。
     /// </summary>
-    public int Prepare(PointStreamer streamer, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
+    public int Prepare(PointStreamer streamer, List<NodeSelection> selections, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
     {
         // ロード済みノードの描画コマンドとノード描画データを詰める
         int commandCount = 0;
-        IReadOnlyList<int> loadedNodeIndices = streamer.LoadedNodeIndices;
-        for (int i = 0; i < loadedNodeIndices.Count; i++)
+        _drawnNodeIndices.Clear();
+        for (int i = 0; i < selections.Count; i++)
         {
-            commandCount = AppendDrawCommand(streamer, loadedNodeIndices[i], pointSizeScale, commandCount);
+            commandCount = AppendSelectionOrFallback(streamer, selections[i].nodeIndex, pointSizeScale, commandCount);
         }
 
         // 描画対象が無ければ転送もしない
@@ -110,6 +111,20 @@ public class MultiDrawRenderer : IDisposable
         _rp.matProps = _mpb;
 
         return commandCount;
+    }
+
+    /// <summary>選択ノードが未ロードなら、ロード済みの親ノードを代替描画する。</summary>
+    private int AppendSelectionOrFallback(PointStreamer streamer, int nodeIndex, float pointSizeScale, int commandCount)
+    {
+        return streamer.TryResolveDrawableNode(nodeIndex, out int drawableNodeIndex)
+            ? AppendDrawCommandOnce(streamer, drawableNodeIndex, pointSizeScale, commandCount)
+            : commandCount;
+    }
+
+    private int AppendDrawCommandOnce(PointStreamer streamer, int nodeIndex, float pointSizeScale, int commandCount)
+    {
+        if (!_drawnNodeIndices.Add(nodeIndex)) return commandCount;
+        return AppendDrawCommand(streamer, nodeIndex, pointSizeScale, commandCount);
     }
 
     /// <summary>Prepareで詰めたコマンドを1回のマルチドローでカメラへ直接描画する</summary>
