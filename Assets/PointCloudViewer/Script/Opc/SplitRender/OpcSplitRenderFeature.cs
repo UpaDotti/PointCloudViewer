@@ -108,9 +108,6 @@ public class OpcSplitRenderPass : ScriptableRenderPass
     // 合成のフルスクリーン描画に渡すスライス別MPB（1枚を使い回すとRG実行時にエイリアスするため別々に持つ）
     private MaterialPropertyBlock[] _compositeMpb;
 
-    // 合成のZTestに使う自前深度（毎フレームfarでクリアし、スライス間で最前面を競う）
-    private RTHandle _compositeDepth;
-
     private int _rtWidth;
     private int _rtHeight;
     private int _allocatedSplit;
@@ -139,7 +136,6 @@ public class OpcSplitRenderPass : ScriptableRenderPass
     {
         public Material material;
         public MaterialPropertyBlock mpb;
-        public bool clearFirst;  // 最初の有効スライスで画面と合成深度をクリアする
     }
 
     public OpcSplitRenderPass(Material pointSplitMaterial, Material compositeMaterial)
@@ -205,9 +201,9 @@ public class OpcSplitRenderPass : ScriptableRenderPass
     private void RecordComposite(RenderGraph renderGraph, UniversalResourceData resourceData, int splitCount, Matrix4x4 currentVP)
     {
         TextureHandle activeColor = resourceData.activeColorTexture;
-        TextureHandle compositeDepth = renderGraph.ImportTexture(_compositeDepth);
+        TextureHandle activeDepth = resourceData.activeDepthTexture;
+        if (!activeDepth.IsValid()) return;
 
-        bool firstDone = false;
         for (int j = 0; j < splitCount; j++)
         {
             if (!_sliceValid[j]) continue;
@@ -226,18 +222,15 @@ public class OpcSplitRenderPass : ScriptableRenderPass
             {
                 data.material = _compositeMaterial;
                 data.mpb = _compositeMpb[j];
-                data.clearFirst = !firstDone;
-
                 builder.UseTexture(sliceColor, AccessFlags.Read);
                 builder.UseTexture(sliceDepth, AccessFlags.Read);
                 builder.SetRenderAttachment(activeColor, 0, AccessFlags.ReadWrite);
-                builder.SetRenderAttachmentDepth(compositeDepth, AccessFlags.Write);
+                builder.SetRenderAttachmentDepth(activeDepth, AccessFlags.ReadWrite);
                 builder.AllowPassCulling(false);
 
                 builder.SetRenderFunc((CompositePassData d, RasterGraphContext context) => ExecuteComposite(d, context));
             }
 
-            firstDone = true;
         }
     }
 
@@ -272,12 +265,6 @@ public class OpcSplitRenderPass : ScriptableRenderPass
     {
         RasterCommandBuffer cmd = context.cmd;
 
-        // 最初の有効スライスで画面と合成深度をクリア
-        if (data.clearFirst)
-        {
-            cmd.ClearRenderTarget(RTClearFlags.Depth, Color.clear, 1f, 0);
-        }
-
         // フルスクリーン三角形（3頂点）でスライスを合成
         cmd.DrawProcedural(Matrix4x4.identity, data.material, 0, MeshTopology.Triangles, 3, 1, data.mpb);
     }
@@ -311,13 +298,6 @@ public class OpcSplitRenderPass : ScriptableRenderPass
             _sliceValid[i] = false;
         }
 
-        // 合成のZTest用深度
-        _compositeDepth = RTHandles.Alloc(
-            width, height,
-            depthBufferBits: DepthBits.Depth32,
-            colorFormat: GraphicsFormat.None,
-            name: "_OpcCompositeDepth");
-
         _rtWidth = width;
         _rtHeight = height;
         _allocatedSplit = splitCount;
@@ -335,8 +315,6 @@ public class OpcSplitRenderPass : ScriptableRenderPass
         }
         _sliceColor = null;
         _sliceDepth = null;
-        _compositeDepth?.Release();
-        _compositeDepth = null;
     }
 
     public void Dispose()
