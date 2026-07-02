@@ -18,40 +18,27 @@ public class OpcLoader : MonoBehaviour
     [SerializeField]
     private Material _pointMaterial;
 
-    // 分割描画（RendererFeature経由でRTへ描く）を使うか。OFFなら従来どおりカメラへ直接描画する。
+    [Header("Quality")]
     [SerializeField]
-    private bool _useSplitRender = false;
-
-    [Header("Point Size")]
-    [SerializeField]
-    private float _minPixelSize = 0.1f;
-
-    [SerializeField]
-    private float _maxPixelSize = 8.0f;
-
-    [SerializeField]
-    private float _pointSizeScale = 1.0f;
-
-    [Header("LOD / Streaming")]
-    [SerializeField]
-    private float _maxPointsPerPixel = 1.0f;
-
-    [SerializeField]
+    [Min(1)]
     private int _pointBudget = 2_000_000;
 
-    [SerializeField]
-    private int _maxLoadsPerFrame = 10;
-
-    [SerializeField]
-    private int _unloadDelayFrames = 30;
-
-    [Header("Fallback")]
     [SerializeField]
     [Range(0.25f, 2.0f)]
     private float _fallbackQuality = 1.0f;
 
+    [Header("Point Size")]
+    [SerializeField]
+    [Range(0.1f, 2.0f)]
+    private float _pointSizeScale = 1.0f;
+
     // 共有点プール容量の自動算出に使う余裕係数（部分ロードの必要量 ≈ 予算×先読み係数 に視界外残留分の余裕を加える）
     private const int PoolCapacityBudgetMultiplier = 4;
+    private const float MinPixelSize = 0.1f;
+    private const float MaxPixelSize = 8.0f;
+    private const float MaxPointsPerPixel = 1.0f;
+    private const int MaxLoadsPerFrame = 10;
+    private const int UnloadDelayFrames = 30;
 
     // 開いたOPCファイル（ヘッダ+統合ノード索引）。読み込み失敗時はnullのまま。
     private OpcFile _file;
@@ -76,6 +63,13 @@ public class OpcLoader : MonoBehaviour
     private static readonly ProfilerMarker _markerDrawPointCloud = new ProfilerMarker("OpcLoader.DrawPointCloud");
 
 
+    private void OnValidate()
+    {
+        _pointBudget = Math.Max(1, _pointBudget);
+        _fallbackQuality = Mathf.Clamp(_fallbackQuality, 0.25f, 2.0f);
+        _pointSizeScale = Mathf.Clamp(_pointSizeScale, 0.1f, 2.0f);
+    }
+
 
     private void Start()
     {
@@ -90,7 +84,7 @@ public class OpcLoader : MonoBehaviour
         }
 
         // 各部品を組み立てる（依存は LodSelector / Streamer / Renderer → File / Pool の一方向）
-        _lodSelector = new NodeLodSelector(_file, _maxPointsPerPixel);
+        _lodSelector = new NodeLodSelector(_file, MaxPointsPerPixel);
         _pointPool = new GpuPointPool(ComputePointPoolCapacity());
         _streamer = new PointStreamer(
             _file,
@@ -98,8 +92,8 @@ public class OpcLoader : MonoBehaviour
             _pointPool,
             new PointStreamer.Options
             {
-                maxLoadsPerFrame = _maxLoadsPerFrame,
-                unloadDelayFrames = _unloadDelayFrames,
+                maxLoadsPerFrame = MaxLoadsPerFrame,
+                unloadDelayFrames = UnloadDelayFrames,
                 fallbackQuality = _fallbackQuality,
             }
         );
@@ -108,36 +102,23 @@ public class OpcLoader : MonoBehaviour
 
     private void Update()
     {
-        // カメラ情報を取り込み、視界に入っているノードと描画点数を選択する
         using (_markerGetVisibleNodes.Auto())
         {
             _cameraState = CameraState.Capture(_mainCamera, _planes);
             _lodSelector.Select(_cameraState, _pointBudget, _selections);
         }
 
-        // 点群データをロード・アンロード
         using (_markerSyncStreaming.Auto())
         {
             _streamer.Update(_selections, Time.frameCount);
         }
 
-        // 点群を描画
         using (_markerDrawPointCloud.Auto())
         {
-            if (_useSplitRender)
-            {
-                // 分割描画: コマンドを詰めてBridge経由でRendererFeatureへ渡す（実描画はPassが行う）
-                int commandCount = _renderer.Prepare(_streamer, _selections, _cameraState, _minPixelSize, _maxPixelSize, _pointSizeScale);
-                OpcSplitRenderBridge.Active = true;
-                OpcSplitRenderBridge.Renderer = _renderer;
-                OpcSplitRenderBridge.CommandCount = commandCount;
-            }
-            else
-            {
-                // 直接描画: 従来どおりカメラへマルチドロー
-                OpcSplitRenderBridge.Active = false;
-                _renderer.Draw(_streamer, _selections, _cameraState, _minPixelSize, _maxPixelSize, _pointSizeScale);
-            }
+            int commandCount = _renderer.Prepare(_streamer, _selections, _cameraState, MinPixelSize, MaxPixelSize, _pointSizeScale);
+            OpcSplitRenderBridge.Active = true;
+            OpcSplitRenderBridge.Renderer = _renderer;
+            OpcSplitRenderBridge.CommandCount = commandCount;
         }
     }
 
@@ -174,7 +155,7 @@ public class OpcLoader : MonoBehaviour
 
     private void Cleanup()
     {
-        // 分割描画を止め、破棄するレンダラーをRendererFeature側が参照しないようにする
+        // 破棄するレンダラーをRendererFeature側が参照しないようにする
         OpcSplitRenderBridge.Active = false;
         OpcSplitRenderBridge.Renderer = null;
         OpcSplitRenderBridge.CommandCount = 0;

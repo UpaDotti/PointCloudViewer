@@ -10,7 +10,7 @@ using UnityEngine.Experimental.Rendering;
 /// </summary>
 public static class OpcSplitRenderBridge
 {
-    // 分割描画が有効か（OpcLoaderの_useSplitRenderと連動）
+    // 分割描画が有効か（OpcLoaderが毎フレーム更新する）
     public static bool Active;
 
     // 今フレームのコマンドを詰め終えたレンダラー（PrepareでMPB/QuadIndex/コマンド数が確定済み）
