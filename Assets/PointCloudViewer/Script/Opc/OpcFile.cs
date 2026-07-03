@@ -12,6 +12,8 @@ using UnityEngine;
 /// </summary>
 public class OpcFile
 {
+    public const ushort PointStrideRgb = 9;
+
     public Header FileHeader { get; private set; }
 
     // 統合ノード配列（先頭に枝、後ろに葉を格納する）
@@ -66,6 +68,11 @@ public class OpcFile
 
                 var result = new OpcFile();
                 result.FileHeader = ReadHeader(reader);
+                if (!IsSupportedPointStride(result.FileHeader.pointStrideBytes))
+                {
+                    error = $"未対応のOPC点データstrideです: {result.FileHeader.pointStrideBytes} bytes/point（対応: 9=RGB）";
+                    return false;
+                }
 
                 // 枝→葉の順でレコードを読み、統合ノード配列に詰める（パスは子参照構築にだけ使う一時データ）
                 int branchCount = (int)result.FileHeader.branchCount;
@@ -126,6 +133,11 @@ public class OpcFile
         header.pointStrideBytes = reader.ReadUInt16();
 
         return header;
+    }
+
+    public static bool IsSupportedPointStride(ushort pointStrideBytes)
+    {
+        return pointStrideBytes == PointStrideRgb;
     }
 
     // 枝レコードを統合配列の先頭側（0〜branchCount-1）に読み込む

@@ -51,6 +51,11 @@ public class OpcPointLoadWorker : IDisposable
 
     public OpcPointLoadWorker(string fullPath, int stride, int maxPointCount)
     {
+        if (!OpcFile.IsSupportedPointStride((ushort)stride))
+        {
+            throw new ArgumentOutOfRangeException(nameof(stride), stride, "Supported OPC point stride is 9 bytes (RGB).");
+        }
+
         _stride = stride;
         _stream = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read);
 
@@ -141,7 +146,7 @@ public class OpcPointLoadWorker : IDisposable
                 byte r8 = raw[p + 6];
                 byte g8 = raw[p + 7];
                 byte b8 = raw[p + 8];
-                byte a8 = raw[p + 9];
+                byte a8 = byte.MaxValue;
 
                 packed[i].xy = (uint)(x16 | (y16 << 16));
                 packed[i].z = (uint)z16;
