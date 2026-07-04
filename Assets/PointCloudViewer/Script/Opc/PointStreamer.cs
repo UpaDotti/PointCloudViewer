@@ -60,6 +60,9 @@ public class PointStreamer : IDisposable
         // 今フレームで描画する点数（先頭からこの数だけ描画）
         public uint drawCount;
 
+        // fallbackとして同じフレームに複数回要求されたときだけdrawCountを加算するためのフレーム番号
+        public int fallbackAccumulationFrame;
+
         // データを持っているか（ロード済みリストの所属と一致させる）
         public bool HasData => poolStart >= 0;
     }
@@ -78,7 +81,7 @@ public class PointStreamer : IDisposable
     private const int MinLoadCount = 1024;
     private const float BaseFallbackPointsPerPixel = 0.35f;
     private const int BaseFallbackMaxDrawCount = 65_536;
-    private const float FallbackLoadPriority = 2.0f;
+    private const float FallbackLoadPriority = 0.25f;
     private const int FallbackAncestorLevels = 2;
 
     // プール満杯やファイル不足でロードを見送ったノードの再要求間隔（毎フレームの取り直しを防ぐ）
@@ -121,6 +124,7 @@ public class PointStreamer : IDisposable
         {
             _residency[i].poolStart = -1;
             _residency[i].lastWantedFrame = -1;
+            _residency[i].fallbackAccumulationFrame = -1;
         }
 
         // 点データ読み込み用のワーカースレッドを起動する（極小ファイルでも最低限のバッファは確保する）
@@ -245,7 +249,15 @@ public class PointStreamer : IDisposable
 
         ref NodeResidency res = ref _residency[nodeIndex];
         uint fallbackDrawCount = GetFallbackDrawCount(areaPx, node.pointCount);
-        res.drawCount = Math.Max(res.drawCount, fallbackDrawCount);
+        if (res.fallbackAccumulationFrame == frame)
+        {
+            res.drawCount = Math.Min(node.pointCount, res.drawCount + fallbackDrawCount);
+        }
+        else
+        {
+            res.drawCount = fallbackDrawCount;
+            res.fallbackAccumulationFrame = frame;
+        }
         res.lastWantedFrame = frame;
 
         if (res.state == ResidencyState.Loading || res.state == ResidencyState.Refreshing) return;

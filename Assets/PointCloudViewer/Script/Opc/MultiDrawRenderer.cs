@@ -19,7 +19,8 @@ public class MultiDrawRenderer : IDisposable
     private GraphicsBuffer _nodeDataBuffer;
     private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _commandArgs;
     private readonly NodeDrawData[] _nodeDrawData;
-    private readonly HashSet<int> _drawnNodeIndices = new HashSet<int>();
+    private readonly Bounds[] _pointSizeBoundsByCommand;
+    private readonly Dictionary<int, int> _commandIndexByNode = new Dictionary<int, int>();
 
     // シェーダプロパティID（毎フレームの文字列ハッシュ計算を避ける）
     private static readonly int _pointsId = Shader.PropertyToID("_Points");
@@ -60,6 +61,7 @@ public class MultiDrawRenderer : IDisposable
         _nodeDataBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, maxNodes, System.Runtime.InteropServices.Marshal.SizeOf<NodeDrawData>());
         _commandArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[maxNodes];
         _nodeDrawData = new NodeDrawData[maxNodes];
+        _pointSizeBoundsByCommand = new Bounds[maxNodes];
     }
 
     // 分割描画パスが使うアクセサ（CommandBufferからノード毎に発行するため）
@@ -92,7 +94,7 @@ public class MultiDrawRenderer : IDisposable
         // ロード済みノードの描画コマンドとノード描画データを詰める
         int commandCount = 0;
         LastPreparedPointCount = 0;
-        _drawnNodeIndices.Clear();
+        _commandIndexByNode.Clear();
         for (int i = 0; i < selections.Count; i++)
         {
             commandCount = AppendSelectionOrFallback(streamer, selections[i].nodeIndex, pointSizeScale, commandCount);
@@ -121,14 +123,33 @@ public class MultiDrawRenderer : IDisposable
     private int AppendSelectionOrFallback(PointStreamer streamer, int nodeIndex, float pointSizeScale, int commandCount)
     {
         return streamer.TryResolveDrawableNode(nodeIndex, out int drawableNodeIndex)
-            ? AppendDrawCommandOnce(streamer, drawableNodeIndex, pointSizeScale, commandCount)
+            ? AppendDrawCommandOnce(streamer, drawableNodeIndex, _file.Nodes[nodeIndex].bounds, pointSizeScale, commandCount)
             : commandCount;
     }
 
-    private int AppendDrawCommandOnce(PointStreamer streamer, int nodeIndex, float pointSizeScale, int commandCount)
+    private int AppendDrawCommandOnce(PointStreamer streamer, int nodeIndex, Bounds pointSizeBounds, float pointSizeScale, int commandCount)
     {
-        if (!_drawnNodeIndices.Add(nodeIndex)) return commandCount;
-        return AppendDrawCommand(streamer, nodeIndex, pointSizeScale, commandCount);
+        if (_commandIndexByNode.TryGetValue(nodeIndex, out int existingCommandIndex))
+        {
+            PointStreamer.NodeResidency residency = streamer.GetResidency(nodeIndex);
+            uint instanceCount = residency.drawCount;
+            if (instanceCount > (uint)residency.loadedCount) instanceCount = (uint)residency.loadedCount;
+            if (instanceCount == 0) return commandCount;
+
+            Bounds combinedBounds = _pointSizeBoundsByCommand[existingCommandIndex];
+            combinedBounds.Encapsulate(pointSizeBounds);
+            _pointSizeBoundsByCommand[existingCommandIndex] = combinedBounds;
+            _nodeDrawData[existingCommandIndex].worldRadius = ComputeWorldPointRadius(combinedBounds, instanceCount, pointSizeScale);
+            return commandCount;
+        }
+
+        int nextCommandCount = AppendDrawCommand(streamer, nodeIndex, pointSizeBounds, pointSizeScale, commandCount);
+        if (nextCommandCount > commandCount)
+        {
+            _commandIndexByNode[nodeIndex] = commandCount;
+            _pointSizeBoundsByCommand[commandCount] = pointSizeBounds;
+        }
+        return nextCommandCount;
     }
 
     /// <summary>Prepareで詰めたコマンドを1回のマルチドローでカメラへ直接描画する</summary>
@@ -146,7 +167,7 @@ public class MultiDrawRenderer : IDisposable
     }
 
     // 1ノード分の描画コマンドとノード描画データを配列に積み、積んだ後のコマンド数を返す
-    private int AppendDrawCommand(PointStreamer streamer, int nodeIndex, float pointSizeScale, int commandCount)
+    private int AppendDrawCommand(PointStreamer streamer, int nodeIndex, Bounds pointSizeBounds, float pointSizeScale, int commandCount)
     {
         PointStreamer.NodeResidency residency = streamer.GetResidency(nodeIndex);
 
@@ -172,7 +193,7 @@ public class MultiDrawRenderer : IDisposable
         _nodeDrawData[commandCount] = new NodeDrawData
         {
             boundsMin = bounds.min,
-            worldRadius = ComputeWorldPointRadius(bounds, instanceCount, pointSizeScale),
+            worldRadius = ComputeWorldPointRadius(pointSizeBounds, instanceCount, pointSizeScale),
             boundsMax = bounds.max,
             pointStart = (uint)residency.poolStart,
         };

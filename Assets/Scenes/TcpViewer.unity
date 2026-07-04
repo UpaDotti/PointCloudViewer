@@ -366,9 +366,10 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::OpcLoader
   _filePath: Assets/sample.opc
   _pointMaterial: {fileID: 2100000, guid: 98fc76e6e3a384249b3f5ce8eb3a0793, type: 2}
+  _renderMode: 1
   _pointBudget: 4000000
   _fallbackQuality: 1
-  _pointSizeScale: 0.7
+  _pointSizeScale: 0.5
 --- !u!4 &1022487359
 Transform:
   m_ObjectHideFlags: 0
