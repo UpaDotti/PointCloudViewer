@@ -18,6 +18,9 @@ public static class OpcSplitRenderBridge
 
     // 今フレームのコマンド数（ロード済みノード数）
     public static int CommandCount;
+
+    // 今フレームでPrepareされた合計描画点数
+    public static long PointCount;
 }
 
 /// <summary>
@@ -156,6 +159,9 @@ public class OpcSplitRenderPass : ScriptableRenderPass
 
         // スライスバッファ群を確保（サイズ/分割数が変われば作り直す）
         int splitCount = Mathf.Max(1, SplitCount);
+        Benchmarker.Record("OpcSplit.SplitCount", splitCount);
+        Benchmarker.Record("OpcSplit.Draw.Commands", commandCount);
+        Benchmarker.Record("OpcSplit.Draw.Points", OpcSplitRenderBridge.PointCount);
         RenderTextureDescriptor desc = cameraData.cameraTargetDescriptor;
         EnsureTargets(desc.width, desc.height, splitCount);
 
@@ -204,9 +210,12 @@ public class OpcSplitRenderPass : ScriptableRenderPass
         TextureHandle activeDepth = resourceData.activeDepthTexture;
         if (!activeDepth.IsValid()) return;
 
+        int compositePasses = 0;
+
         for (int j = 0; j < splitCount; j++)
         {
             if (!_sliceValid[j]) continue;
+            compositePasses++;
 
             // スライスの色/深度と再投影行列をMPBへ束縛（スライスごとに別MPB＝実行時エイリアス回避）
             _compositeMpb[j].SetTexture(_sliceColorProp, _sliceColor[j]);
@@ -232,6 +241,8 @@ public class OpcSplitRenderPass : ScriptableRenderPass
             }
 
         }
+
+        Benchmarker.Record("OpcSplit.Composite.DrawCalls", compositePasses);
     }
 
     // 今フレームのスライスをクリアして描き直す
@@ -248,6 +259,8 @@ public class OpcSplitRenderPass : ScriptableRenderPass
 
         MaterialPropertyBlock mpb = data.renderer.MaterialProperties;
         GraphicsBuffer quadIndex = data.renderer.QuadIndex;
+        int sliceDrawCalls = 0;
+        long slicePointCount = 0;
         for (int i = 0; i < data.commandCount; i++)
         {
             int fullCount = data.renderer.GetInstanceCount(i);
@@ -257,7 +270,12 @@ public class OpcSplitRenderPass : ScriptableRenderPass
 
             cmd.SetGlobalInt(_commandIdProp, i);
             cmd.DrawProcedural(quadIndex, Matrix4x4.identity, data.material, 0, MeshTopology.Triangles, 6, sliceCount, mpb);
+            sliceDrawCalls++;
+            slicePointCount += sliceCount;
         }
+
+        Benchmarker.Record("OpcSplit.Slice.DrawCalls", sliceDrawCalls);
+        Benchmarker.Record("OpcSplit.Slice.Points", slicePointCount);
     }
 
     // 1スライスをフルスクリーンで画面へ重ねる

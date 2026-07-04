@@ -10,6 +10,11 @@ using UnityEngine;
 /// </summary>
 public class OpcLoader : MonoBehaviour
 {
+    private enum RenderMode
+    {
+        Direct,
+        Split,
+    }
     [Header("File")]
     [SerializeField]
     private string _filePath = "Assets/sample.opc";
@@ -17,6 +22,9 @@ public class OpcLoader : MonoBehaviour
     [Header("Rendering")]
     [SerializeField]
     private Material _pointMaterial;
+
+    [SerializeField]
+    private RenderMode _renderMode = RenderMode.Split;
 
     [Header("Quality")]
     [SerializeField]
@@ -116,9 +124,26 @@ public class OpcLoader : MonoBehaviour
         using (_markerDrawPointCloud.Auto())
         {
             int commandCount = _renderer.Prepare(_streamer, _selections, _cameraState, MinPixelSize, MaxPixelSize, _pointSizeScale);
+            RecordBenchmarkFrame(commandCount);
+
+            if (commandCount == 0)
+            {
+                DisableSplitRenderBridge();
+                return;
+            }
+
+            if (_renderMode == RenderMode.Direct)
+            {
+                DisableSplitRenderBridge();
+                _renderer.DrawDirect(commandCount);
+                Benchmarker.Record("OpcLoader.Direct.DrawCalls", 1);
+                return;
+            }
+
             OpcSplitRenderBridge.Active = true;
             OpcSplitRenderBridge.Renderer = _renderer;
             OpcSplitRenderBridge.CommandCount = commandCount;
+            OpcSplitRenderBridge.PointCount = _renderer.LastPreparedPointCount;
         }
     }
 
@@ -141,6 +166,23 @@ public class OpcLoader : MonoBehaviour
         return Path.Combine(Application.dataPath, shortFilePath);
     }
 
+    private void RecordBenchmarkFrame(int commandCount)
+    {
+        Benchmarker.Record("OpcLoader.Mode.Direct", _renderMode == RenderMode.Direct ? 1 : 0);
+        Benchmarker.Record("OpcLoader.Mode.Split", _renderMode == RenderMode.Split ? 1 : 0);
+        Benchmarker.Record("OpcLoader.Draw.Commands", commandCount);
+        Benchmarker.Record("OpcLoader.Draw.Points", _renderer.LastPreparedPointCount);
+        Benchmarker.Record("OpcLoader.Selection.Count", _selections.Count);
+    }
+
+    private static void DisableSplitRenderBridge()
+    {
+        OpcSplitRenderBridge.Active = false;
+        OpcSplitRenderBridge.Renderer = null;
+        OpcSplitRenderBridge.CommandCount = 0;
+        OpcSplitRenderBridge.PointCount = 0;
+    }
+
 
 
     private void OnDisable()
@@ -156,9 +198,7 @@ public class OpcLoader : MonoBehaviour
     private void Cleanup()
     {
         // 破棄するレンダラーをRendererFeature側が参照しないようにする
-        OpcSplitRenderBridge.Active = false;
-        OpcSplitRenderBridge.Renderer = null;
-        OpcSplitRenderBridge.CommandCount = 0;
+        DisableSplitRenderBridge();
 
         // ストリーマを先に止める（停止後に新しい結果が出ないようにする）
         _streamer?.Dispose();

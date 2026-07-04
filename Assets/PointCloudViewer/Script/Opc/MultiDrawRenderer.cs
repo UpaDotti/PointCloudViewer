@@ -72,6 +72,9 @@ public class MultiDrawRenderer : IDisposable
     /// <summary>コマンドindexのノードが描く点数（先頭からこの数だけ描く）</summary>
     public int GetInstanceCount(int commandIndex) => (int)_commandArgs[commandIndex].instanceCount;
 
+    /// <summary>直近のPrepareで詰めた合計描画点数</summary>
+    public long LastPreparedPointCount { get; private set; }
+
     /// <summary>ロード済みノードを1回のマルチドローでカメラへ直接描画する</summary>
     public void Draw(PointStreamer streamer, List<NodeSelection> selections, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
     {
@@ -88,6 +91,7 @@ public class MultiDrawRenderer : IDisposable
     {
         // ロード済みノードの描画コマンドとノード描画データを詰める
         int commandCount = 0;
+        LastPreparedPointCount = 0;
         _drawnNodeIndices.Clear();
         for (int i = 0; i < selections.Count; i++)
         {
@@ -172,6 +176,8 @@ public class MultiDrawRenderer : IDisposable
             boundsMax = bounds.max,
             pointStart = (uint)residency.poolStart,
         };
+
+        LastPreparedPointCount += instanceCount;
 
         return commandCount + 1;
     }
