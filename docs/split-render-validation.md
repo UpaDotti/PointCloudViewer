@@ -1,45 +1,45 @@
-# Split Rendering Validation
+# 分割描画検証
 
-Date: 2026-07-04
+記録日: 2026-07-04
 
-## Summary
+## 概要
 
-PointCloudViewer uses a split rendering path instead of the previous stage-based approach.
-The current implementation renders one slice per frame into persistent slice color/depth buffers, then composites all valid slices by reprojection and depth testing.
+PointCloudViewerでは、以前のStage方式ではなく分割描画方式を使っています。
+現在の実装は、1フレームに1スライスを永続スライス色・深度バッファへ描画し、有効な全スライスを再投影と深度テストで合成します。
 
-User visual check on 2026-07-04: the split rendering output is drawing correctly.
+2026-07-04のユーザー目視確認では、分割描画の出力は正しく描画されていると確認しました。
 
-## Implementation Under Test
+## 検証対象の実装
 
 - `Assets/PointCloudViewer/Script/Opc/SplitRender/OpcSplitRenderFeature.cs`
-  - `OpcSplitRenderFeature`: enables the split render pass from URP.
-  - `OpcSplitRenderPass`: renders one slice per frame and composites valid slices.
-  - `OpcSplitRenderBridge`: receives prepared draw data from `OpcLoader`.
+  - `OpcSplitRenderFeature`: URPから分割描画パスを有効化します。
+  - `OpcSplitRenderPass`: 1フレームに1スライスを描画し、有効なスライスを合成します。
+  - `OpcSplitRenderBridge`: `OpcLoader` が準備した描画データを受け取ります。
 - `Assets/PointCloudViewer/Shader/PointCloud_CircleSplit.shader`
-  - Draws points for the current slice using slice offset and stride.
+  - スライスオフセットとストライドを使い、現在のスライスに属する点だけを描画します。
 - `Assets/PointCloudViewer/Shader/PointCloudSplitComposite.shader`
-  - Reprojects each slice from its captured VP matrix to the current camera VP matrix.
-  - Writes depth so the nearest slice/background relationship can be evaluated by depth testing.
+  - 各スライスを、その撮影時VP行列から現在カメラVP行列へ再投影します。
+  - 深度を書き込み、最前面のスライスや背景との前後関係を深度テストで評価できるようにします。
 - `Assets/PointCloudViewer/Script/Opc/OpcLoader.cs`
-  - Provides `Direct` / `Split` render mode switching for benchmark comparison.
+  - ベンチマーク比較用に `Direct` / `Split` 描画モードを切り替えます。
 
-## Validation Conditions
+## 検証条件
 
-| Item | Result | Evidence |
+| 項目 | 結果 | 証拠 |
 | --- | --- | --- |
-| Split mode selected | Confirmed | `OpcLoader.Mode.Split avg = 1.00` |
-| Direct mode selected for comparison | Confirmed | `OpcLoader.Mode.Direct avg = 1.00` in direct run |
-| Same camera route | Confirmed by benchmark setup | Both runs use `CameraOrbitMover` and `BenchmarkSession` |
-| Comparable selected nodes | Confirmed | Split avg 799.98, Direct avg 799.98 |
-| Comparable command count | Confirmed | Split avg 669.53, Direct avg 671.17 |
-| Comparable point count | Confirmed | Split avg 5,215,645, Direct avg 5,207,191 |
-| Visual correctness | Confirmed by user | User stated: correct drawing is visible |
+| Splitモード選択 | 確認済み | `OpcLoader.Mode.Split avg = 1.00` |
+| 比較用Directモード選択 | 確認済み | Direct実行で `OpcLoader.Mode.Direct avg = 1.00` |
+| 同一カメラ経路 | ベンチマーク設定で確認 | 両方の実行で `CameraOrbitMover` と `BenchmarkSession` を使用 |
+| 選択ノード数の比較可能性 | 確認済み | Split平均 799.98、Direct平均 799.98 |
+| 描画コマンド数の比較可能性 | 確認済み | Split平均 669.53、Direct平均 671.17 |
+| 描画点数の比較可能性 | 確認済み | Split平均 5,215,645、Direct平均 5,207,191 |
+| 視覚的な正しさ | ユーザー確認済み | 正しく描画されているとユーザーが確認 |
 
-## Benchmark Result
+## ベンチマーク結果
 
-### Split Rendering
+### 分割描画
 
-| Metric | Average | p50 | p95 | Max |
+| 指標 | 平均 | p50 | p95 | 最大 |
 | --- | ---: | ---: | ---: | ---: |
 | Frame ms | 18.23 | 18.13 | 20.67 | 27.72 |
 | Draw commands | 669.53 | 709.00 | 776.00 | 789.00 |
@@ -52,11 +52,11 @@ User visual check on 2026-07-04: the split rendering output is drawing correctly
 | SyncNodeStreaming ms | 0.42 | 0.39 | 0.67 | 2.00 |
 | DrawPointCloud CPU marker ms | 0.13 | 0.12 | 0.17 | 0.23 |
 
-Approximate FPS from average frame time: 54.9 FPS.
+平均フレーム時間から計算した概算FPS: 54.9 FPS。
 
-### Direct Rendering
+### Direct描画
 
-| Metric | Average | p50 | p95 | Max |
+| 指標 | 平均 | p50 | p95 | 最大 |
 | --- | ---: | ---: | ---: | ---: |
 | Frame ms | 31.38 | 31.42 | 34.29 | 79.32 |
 | Draw commands | 671.17 | 709.00 | 774.00 | 789.00 |
@@ -66,34 +66,60 @@ Approximate FPS from average frame time: 54.9 FPS.
 | SyncNodeStreaming ms | 0.31 | 0.29 | 0.50 | 1.22 |
 | DrawPointCloud CPU marker ms | 0.11 | 0.11 | 0.15 | 0.23 |
 
-Approximate FPS from average frame time: 31.9 FPS.
+平均フレーム時間から計算した概算FPS: 31.9 FPS。
 
-## Interpretation
+### SplitCount比較
 
-The two runs are comparable because selected nodes, command count, and total draw points are nearly the same.
-Under these conditions, split rendering reduces average frame time from 31.38 ms to 18.23 ms.
-That is about 1.72x faster by average frame time.
+記録日: 2026-07-08
 
-The CPU marker `OpcLoader.DrawPointCloud` does not include the full GPU cost of the rendering work.
-Use `Frame` as the primary performance comparison until GPU timestamp or profiler capture is added.
+計測条件:
 
-With `SplitCount = 4`, the split path draws about one quarter of the points per frame:
+- 描画モード: Split
+- ベンチマーク実行: `CameraOrbitMover` + `BenchmarkSession`
+- Capture設定: `BenchmarkSession (capture=60fps)`
+- 比較値: `SplitCount = 2`、`3`、`4`
+- 同一経路の意図: 3回の実行で同じベンチマーク経路と同じシーン設定を使用
 
-- Total prepared points: about 5.22 million
-- Slice points per frame: about 1.30 million
+| SplitCount | 平均Frame ms | 概算FPS | 平均Draw points | 平均Slice points/frame | 平均Composite draw calls | 平均Draw commands |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 2 | 19.72 | 50.7 | 4,652,939 | 2,326,470 | 2.00 | 680.46 |
+| 3 | 17.26 | 57.9 | 4,672,523 | 1,557,508 | 3.00 | 683.88 |
+| 4 | 16.85 | 59.3 | 4,672,523 | 1,168,131 | 4.00 | 683.88 |
 
-The extra composite cost of four fullscreen passes is lower than the saved point rendering cost in this test.
+メモ:
 
-## Known Limits
+- `SplitCount = 2` は1フレームあたり約233万点のスライス点を描画し、平均19.72msでした。
+- `SplitCount = 3` はスライス点数が1フレームあたり約156万点まで減り、平均17.26msでした。
+- `SplitCount = 4` はスライス点数が1フレームあたり約117万点まで減り、平均16.85msでした。
+- この経路では、測定した値の中で `SplitCount = 4` が最も60FPSに近い結果でした。
+- 合成Draw callは `SplitCount` に比例して増えるため、`8` などの高い値は別途確認が必要です。
 
-- This record relies on user visual confirmation for correctness; no screenshot is committed yet.
-- GPU-only timings for direct draw, slice draw, and composite passes are not measured separately.
-- `Frame` includes all frame work, not only point cloud rendering.
-- Results are for one camera route, one dataset, one resolution, and `SplitCount = 4`.
-- More split counts such as 2 and 8 are not yet compared.
+## 解釈
 
-## Next Checks
+選択ノード数、描画コマンド数、総描画点数がほぼ同じなので、2つの実行結果は比較可能です。
+この条件では、分割描画は平均フレーム時間を31.38msから18.23msへ短縮しました。
+平均フレーム時間では約1.72倍高速です。
 
-- Capture screenshots for split rendering with background geometry.
-- Compare `SplitCount = 2`, `4`, and `8`.
-- Add GPU profiler evidence if the result needs to be explained beyond frame time.
+CPUマーカー `OpcLoader.DrawPointCloud` は描画処理全体のGPUコストを含みません。
+GPU timestampやProfiler captureを追加するまでは、性能比較の主指標として `Frame` を使います。
+
+`SplitCount = 4` では、分割描画経路は1フレームあたり約4分の1の点を描画します。
+
+- 準備された総点数: 約522万点
+- 1フレームあたりのスライス点数: 約130万点
+
+このテストでは、4回のフルスクリーン合成コストより、点描画コスト削減の効果が大きいです。
+
+## 既知の制限
+
+- この記録は正しさをユーザー目視確認に依存しており、スクリーンショットはまだコミットしていません。
+- Direct描画、スライス描画、合成パスごとのGPU専用時間はまだ分離して測定していません。
+- `Frame` には点群描画以外のフレーム処理も含まれます。
+- 結果は1つのカメラ経路、1つのデータセット、1つの解像度、測定済みの分割数に対するものです。
+- `SplitCount = 2`、`3`、`4` は比較済みですが、`SplitCount = 8` は未測定です。
+
+## 次の確認
+
+- 背景ジオメトリありの分割描画スクリーンショットを保存する。
+- `SplitCount = 8` を追加測定し、合成コストが支配的になり始めるか確認する。
+- フレーム時間以上の説明が必要になったら、GPU Profiler証拠を追加する。
