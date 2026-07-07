@@ -24,6 +24,30 @@
 - `Assets/PointCloudViewer/Shader/PointCloudSplitComposite.shader`
   - スライスの色・深度を現在のカメラビューへ再投影して合成するシェーダです。
 
+## URP / Render Graphメモ
+
+対象環境: Unity 6000.3.9f1、URP 17.3.0。
+
+分割描画経路は、URPの `ScriptableRendererFeature` と `ScriptableRenderPass` として実装しています。パスは `AddRenderPasses` から注入し、実際の描画処理は `RecordRenderGraph` でRender GraphのRaster Passとして登録します。
+
+現在の依存:
+
+- `RenderPassEvent.AfterRenderingTransparents` を使い、通常のシーン描画後に分割描画点群を合成します。
+- `RecordRenderGraph` で `UniversalResourceData.activeColorTexture` と `activeDepthTexture` を読み、現在のカメラの色・深度ターゲットへ合成結果を書き込みます。
+- スライス色・深度バッファは外部 `RTHandle` として保持し、毎フレーム `ImportTexture` でRender Graphへ取り込みます。
+- 有効な各スライスを個別のRaster Passとして合成するため、合成パス数は `SplitCount` に比例して増えます。
+
+移行メモ:
+
+- 現在の実装は、旧Compatibility modeの `Execute` 経路ではなく、すでにRender Graph経路を使っています。
+- 大きな移行が必要になるのは、URPのactive color/depthのframe data契約が変わる場合、フレームをまたぐスライスバッファをURP camera historyへ寄せる場合、または合成コスト削減のためにパス統合が必要になった場合です。
+- 今は正しさのスクリーンショットとベンチマーク証拠を優先します。この段階で描画経路を大きく作り替えると、現在の測定結果との比較が難しくなります。
+
+2026-07-08に確認したUnity公式資料:
+
+- Unity Manual: Render graph system in URP: https://docs.unity3d.com/6000.3/Documentation/Manual/urp/render-graph.html
+- Unity Manual: Write a render pass using the render graph system in URP: https://docs.unity3d.com/6000.3/Documentation/Manual/urp/render-graph-write-render-pass.html
+- Unity Manual: Optimize a render graph: https://docs.unity3d.com/6000.3/Documentation/Manual/urp/render-graph-optimize.html
 ## 最新ベンチマーク
 
 Direct描画と分割描画の比較。計測日: 2026-07-04

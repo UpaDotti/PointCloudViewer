@@ -35,6 +35,51 @@ PointCloudViewerでは、以前のStage方式ではなく分割描画方式を�
 | 描画点数の比較可能性 | 確認済み | Split平均 5,215,645、Direct平均 5,207,191 |
 | 視覚的な正しさ | ユーザー確認済み | 正しく描画されているとユーザーが確認 |
 
+## URP / Render Graph制約
+
+記録日: 2026-07-08
+
+対象バージョン:
+
+- Unity Editor: 6000.3.9f1
+- URP package: `com.unity.render-pipelines.universal` 17.3.0
+
+現在の実装経路:
+
+- `OpcSplitRenderFeature` は `ScriptableRendererFeature` を継承しています。
+- `AddRenderPasses` はメインGameカメラだけを対象に、Rendererへパスを注入します。
+- パスは `RecordRenderGraph(RenderGraph renderGraph, ContextContainer frameData)` を使うため、URP Render Graph経路に依存しています。
+- 合成先として、`UniversalResourceData.activeColorTexture` と `activeDepthTexture` を現在のカメラ色・深度ターゲットとして使います。
+- スライス色・深度バッファは永続的な外部 `RTHandle` です。フレームをまたいで内容を保持する必要があるため、毎フレーム `renderGraph.ImportTexture` でRender Graphへ取り込みます。
+- スライス描画とスライス合成は `AddRasterRenderPass` で登録します。
+
+現在の制約:
+
+- 結果は `AfterRenderingTransparents` に依存します。注入タイミングを変えると、シーンジオメトリ、Transparent、点群深度の関係が変わる可能性があります。
+- Render Graph内部の一時テクスチャはスライス内容をフレーム間で保持できないため、分割バッファは手動管理しています。
+- 現在は有効な各スライスが1つの合成Raster Passになるため、合成コストは `SplitCount` とともに増えます。
+- 実装はGameカメラ経路でactive color/depth textureが有効であることを前提にしています。
+
+移行作業が必要になる条件:
+
+- URPがここで使っているframe dataアクセス、特に `UniversalResourceData.activeColorTexture` または `activeDepthTexture` を変更・削除した場合。
+- 手動管理のクロスフレーム `RTHandle` スライスではなく、サポートされたcamera historyベースの設計が必要になった場合。
+- `SplitCount` を増やし、合成パスのオーバーヘッドが実測上のボトルネックになった場合。
+- Scene view、camera stacking、XR、複数カメラ、メインカメラ以外の描画を、スライス履歴を壊さずに支援する必要が出た場合。
+
+今すぐ大きく移行しない理由:
+
+- 現在の実装は `RecordRenderGraph` を通じて、すでにRender Graph API経路に乗っています。
+- 現在の証拠化作業は、正しさのスクリーンショット、SplitCount比較、既知制限の整理が中心です。
+- 追加検証の前に描画経路をリファクタリングすると、現在のベンチマークとスクリーンショット証拠との比較が難しくなります。
+
+2026-07-08に確認したUnity公式資料:
+
+- Unity Manual: Render graph system in URP: https://docs.unity3d.com/6000.3/Documentation/Manual/urp/render-graph.html
+- Unity Manual: Introduction to the render graph system in URP: https://docs.unity3d.com/6000.3/Documentation/Manual/urp/render-graph-introduction.html
+- Unity Manual: Write a render pass using the render graph system in URP: https://docs.unity3d.com/6000.3/Documentation/Manual/urp/render-graph-write-render-pass.html
+- Unity Manual: Frame data in the render graph system in URP: https://docs.unity3d.com/6000.3/Documentation/Manual/urp/render-graph-frame-data.html
+- Unity Manual: Optimize a render graph: https://docs.unity3d.com/6000.3/Documentation/Manual/urp/render-graph-optimize.html
 ## スクリーンショット証拠
 
 ドキュメント用画像は横幅1280pxにリサイズしています。元のキャプチャは `Recordings/` に残しています。
