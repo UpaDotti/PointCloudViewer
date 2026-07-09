@@ -1,6 +1,9 @@
 # PointCloudViewer
 
-大量点群の描画、ストリーミング、LOD選択、分割描画を検証するためのUnity製Point Cloud Viewerです。
+PointCloudViewerは、LAS/TPC/OPC由来の大量点群をUnityで表示するための検証用Viewerです。
+LOD選択、Frustum Culling、Streaming、GraphicsBuffer、Indirect Drawを組み合わせ、数百万〜1億点規模の表示を扱います。
+現在の主な成果は分割描画方式で、同一ベンチマーク経路ではDirect描画の平均31.38msに対し、Split count 4で平均18.23msまで短縮しました。
+スクリーンショット、SplitCount比較、URP / Render Graph上の制約は [分割描画検証](docs/split-render-validation.md) に記録しています。
 
 ## 現在の焦点
 
