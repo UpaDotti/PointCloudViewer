@@ -17,6 +17,10 @@
 
 `sample.opc` は約67.9GBで、`.gitignore` の `*.opc` 対象である。リポジトリをcloneしただけでは再現できない。現在、同一ファイルの配布先、元LASの公開可否、同一OPCを再生成する入力一覧は未記録であり、第三者再現の最大の未解決点である。
 
+## 公開入力データ
+
+入力元は [東京都デジタルツイン実現プロジェクト 区部点群データ](https://www.geospatial.jp/ckan/dataset/tokyopc-23ku-2024) とする。公式説明では航空レーザ測量による16点/平方m以上の高密度点群で、1/500図郭単位のLAS等をZIPで配布している。データセットの使用許諾はCC BY 4.0である。
+
 ## OPC生成手順
 
 PointCloudConverter本体はこのリポジトリへコピーせず、公開GitHubリポジトリを固定コミットで参照する。既に `C:\Users\<user>\Github\PointCloudConverter` がclone済みなら、そのパスを `--converter-repo` に指定してよい。既存の未コミット変更がある場合は破棄せず、別worktreeで固定commitを開く。
@@ -135,6 +139,6 @@ Scene内の `Benchmark` GameObjectは現在無効なので、実行前に有効�
 - 2026-07-04/08の既存結果はオンボードのIntel UHD Graphicsで実施した（2026-07-22ユーザー確認）。同じViewer経路のSplit count 4で平均16.85〜18.23ms、準備済み点数は平均約467万〜522万点だった。詳細は `docs/split-render-validation.md` にある。
 - 既存結果にはOPCのSHA-256、GPU driver、Graphics API、Game View解像度の明記がなく、今回固定した条件での再実行結果ではない。
 - Intel UHD Graphics上の現行commit、同一OPC、1920×1080、固定経路によるConsole統計とスクリーンショットは未取得。
-- 既存70.45億点版 `sample.opc` の第三者向け入手方法と元LASは未確定。別経路として、合成RGB LAS 100,000,001点の生成・OPC変換・ヘッダ検査手順を固定した。
-- 合成入力の100,001点縮小版では、LAS生成、Converter commit `13fe28e` の全OPCパイプライン、ヘッダ検査まで2026-07-22に完走した。1億1点のフルスケール実行値は未取得。
+- 元LASの公開元は東京都デジタルツイン実現プロジェクト区部点群データ（CC BY 4.0）に固定した。
+- `sample.opc` はこの公開LASをPointCloudConverter commit `13fe28ee` で変換した成果物である（ユーザー確認）。ヘッダは7,045,046,813点、SHA-256は上記の値であり、1億点条件を満たす。
 - 「70.45億点格納」と「毎フレーム数百万点描画」は区別する。全点同時常駐・全点同時描画は対象外。
