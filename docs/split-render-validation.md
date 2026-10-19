@@ -82,11 +82,9 @@ PointCloudViewerでは、以前のStage方式ではなく分割描画方式を�
 - Unity Manual: Optimize a render graph: https://docs.unity3d.com/6000.3/Documentation/Manual/urp/render-graph-optimize.html
 ## スクリーンショット証拠
 
-ドキュメント用画像は横幅1280pxにリサイズしています。元のキャプチャは `Recordings/` に残しています。
+画像は公開リポジトリに含めていません。元のキャプチャは `Recordings/`（git管理外）に残しています。
 
 ### 点群のみの静止画
-
-![分割描画された街の点群](images/split-render-city-still-1280.jpg)
 
 元画像: `Recordings/Image Sequence_003_0000.jpg`
 
@@ -97,8 +95,6 @@ PointCloudViewerでは、以前のStage方式ではなく分割描画方式を�
 - 静止画としての視覚的な正しさを支える証拠ですが、時間方向のちらつきや解像度変更後の破綻は検証していません。
 
 ### 背景ジオメトリとの深度確認
-
-![テストジオメトリを含む分割描画点群](images/split-render-depth-geometry-1280.jpg)
 
 元画像: `Recordings/Image Sequence_004_0000.jpg`
 
