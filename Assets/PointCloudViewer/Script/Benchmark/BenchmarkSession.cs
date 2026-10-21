@@ -51,6 +51,9 @@ public class BenchmarkSession : MonoBehaviour, IBenchmarkSink
         _frameCount = 0;
         if (_captureFps > 0) Time.captureFramerate = _captureFps;
 
+        // 計測中はウィンドウが前面に無くても止まらないようにする（Run In Backgroundがオフだと非アクティブ時に止まる）
+        Application.runInBackground = true;
+
         // マーカーの計測を開始
         StartMarkerRecorders();
 

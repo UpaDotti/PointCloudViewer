@@ -29,6 +29,11 @@ public class BenchmarkController : MonoBehaviour
 
     private void HandleSessionFinished()
     {
+        // 計測が終わったら止める（エディタはPlay終了、プレイヤーはアプリ終了）
+#if UNITY_EDITOR
         EditorApplication.isPlaying = false;
+#else
+        Application.Quit();
+#endif
     }
 }

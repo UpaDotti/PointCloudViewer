@@ -83,6 +83,9 @@ public class OpcLoader : MonoBehaviour
     {
         _mainCamera = Camera.main;
 
+        // Unity CLIからの自動計測用に、引数で描画モードとファイルパスを上書きする
+        ApplyCommandLineOverrides();
+
         // OPCファイルのヘッダとノード索引を読み込む（失敗したらエラーを出してこのコンポーネントを止める）
         if (!OpcFile.TryOpen(GetFullPath(_filePath), out _file, out string error))
         {
@@ -159,9 +162,33 @@ public class OpcLoader : MonoBehaviour
         return (int)capacity;
     }
 
-    // "Assets/～" 形式のパスを絶対パスに変換する
+    // "-renderMode Direct|Split|Compute" と "-opcPath 絶対パス" があればInspectorの設定を上書きする
+    private void ApplyCommandLineOverrides()
+    {
+        if (BenchmarkCommandLine.TryGetValue("-renderMode", out string renderModeText))
+        {
+            if (Enum.TryParse(renderModeText, true, out RenderMode renderMode))
+            {
+                _renderMode = renderMode;
+                Debug.Log($"OpcLoader: 引数により描画モードを {_renderMode} にしました。");
+            }
+            else
+            {
+                Debug.LogWarning($"OpcLoader: 不明な描画モード '{renderModeText}' のため、Inspectorの設定 {_renderMode} を使います。");
+            }
+        }
+
+        if (BenchmarkCommandLine.TryGetValue("-opcPath", out string opcPath))
+        {
+            _filePath = opcPath;
+            Debug.Log($"OpcLoader: 引数によりOPCファイルを {_filePath} にしました。");
+        }
+    }
+
+    // "Assets/～" 形式のパスを絶対パスに変換する（すでに絶対パスならそのまま使う）
     private string GetFullPath(string filePath)
     {
+        if (Path.IsPathRooted(filePath)) return filePath;
         string shortFilePath = filePath.Replace("Assets/", "");
         return Path.Combine(Application.dataPath, shortFilePath);
     }
