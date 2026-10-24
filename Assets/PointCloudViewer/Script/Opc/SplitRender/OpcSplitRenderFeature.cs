@@ -111,6 +111,8 @@ public class OpcSplitRenderPass : ScriptableRenderPass
     private int _allocatedSplit;
     // 詰め直しで画素をばらけた順に走査するための係数（画素数と互いに素）
     private int _scrambleMultiplier;
+    // 点一覧ごとの点数を読み戻して記録するコールバック（毎フレームの割り当てを避けるため使い回す）
+    private System.Action<AsyncGPUReadbackRequest>[] _cachePointsCallbacks;
 
     // 詰め直しの1スレッドグループのスレッド数（compute側のnumthreadsと一致させる）
     private const int CompactThreadsPerGroup = 64;
@@ -125,6 +127,13 @@ public class OpcSplitRenderPass : ScriptableRenderPass
     private const int CachePointStride = 20;
     // 間接描画の引数（IndirectDrawIndexedArgs）のuint数
     private const int IndexedArgsCount = 5;
+    // 間接描画の引数のうち点数（instanceCount）の位置
+    private const int InstanceCountArgIndex = 1;
+
+    // パスごとのGPU時間を取るための計測区間（RenderGraph既定の区間はGPU時間を集めないため自前で渡す）
+    private static readonly ProfilingSampler _fillSampler = new ProfilingSampler("OpcSplitFill");
+    private static readonly ProfilingSampler _compactSampler = new ProfilingSampler("OpcSplitCompact");
+    private static readonly ProfilingSampler _splatSampler = new ProfilingSampler("OpcSplitSplat");
 
     private static readonly int _commandIdProp = Shader.PropertyToID("_CommandId");
     private static readonly int _sliceOffsetProp = Shader.PropertyToID("_SliceOffset");
@@ -231,13 +240,25 @@ public class OpcSplitRenderPass : ScriptableRenderPass
         _cacheValid[sliceIndex] = true;
 
         RecordSplat(renderGraph, resourceData, renderer, splitCount);
+
+        RequestCachePointCounts(splitCount);
+    }
+
+    // 有効な点一覧の点数をGPUから非同期で読み戻し、届いたら記録する（数フレーム前の値になる）
+    private void RequestCachePointCounts(int splitCount)
+    {
+        for (int i = 0; i < splitCount; i++)
+        {
+            if (!_cacheValid[i]) continue;
+            AsyncGPUReadback.Request(_cacheArgs[i], _cachePointsCallbacks[i]);
+        }
     }
 
     // 受け持ちの点を1画素の点として作業テクスチャへ描く（深度テストで1画素1点＝最も手前に絞る）
     private void RecordFill(RenderGraph renderGraph, MultiDrawRenderer renderer, int commandCount, int sliceIndex, int splitCount,
         TextureHandle fillPositionRadius, TextureHandle fillColor, TextureHandle fillDepth)
     {
-        using (var builder = renderGraph.AddRasterRenderPass<FillPassData>("OpcSplitFill", out FillPassData data))
+        using (var builder = renderGraph.AddRasterRenderPass<FillPassData>("OpcSplitFill", out FillPassData data, _fillSampler))
         {
             data.material = _fillMaterial;
             data.renderer = renderer;
@@ -259,7 +280,7 @@ public class OpcSplitRenderPass : ScriptableRenderPass
     private void RecordCompact(RenderGraph renderGraph, TextureHandle fillPositionRadius, TextureHandle fillColor,
         BufferHandle cache, BufferHandle cacheArgs)
     {
-        using (var builder = renderGraph.AddComputePass<CompactPassData>("OpcSplitCompact", out CompactPassData data))
+        using (var builder = renderGraph.AddComputePass<CompactPassData>("OpcSplitCompact", out CompactPassData data, _compactSampler))
         {
             data.shader = _compactShader;
             data.resetArgsKernel = _resetArgsKernel;
@@ -291,7 +312,7 @@ public class OpcSplitRenderPass : ScriptableRenderPass
         float minPixelSize = rendererMpb.GetFloat(_minPixelSizeProp);
         float maxPixelSize = rendererMpb.GetFloat(_maxPixelSizeProp);
 
-        using (var builder = renderGraph.AddRasterRenderPass<SplatPassData>("OpcSplitSplat", out SplatPassData data))
+        using (var builder = renderGraph.AddRasterRenderPass<SplatPassData>("OpcSplitSplat", out SplatPassData data, _splatSampler))
         {
             int validCount = 0;
             for (int i = 0; i < splitCount; i++)
@@ -401,11 +422,20 @@ public class OpcSplitRenderPass : ScriptableRenderPass
         _cacheArgs = new GraphicsBuffer[splitCount];
         _cacheValid = new bool[splitCount];
         _splatMpbs = new MaterialPropertyBlock[splitCount];
+        _cachePointsCallbacks = new System.Action<AsyncGPUReadbackRequest>[splitCount];
         for (int i = 0; i < splitCount; i++)
         {
             _caches[i] = new GraphicsBuffer(GraphicsBuffer.Target.Structured, width * height, CachePointStride);
             _cacheArgs[i] = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, IndexedArgsCount, sizeof(uint));
             _splatMpbs[i] = new MaterialPropertyBlock();
+
+            string label = $"OpcSplit.Cache{i}.Points";
+            _cachePointsCallbacks[i] = request =>
+            {
+                // 作り直しや破棄で読めなかった分は記録しない
+                if (request.hasError) return;
+                Benchmarker.Record(label, request.GetData<uint>()[InstanceCountArgIndex]);
+            };
         }
         _cacheWidth = width;
         _cacheHeight = height;
