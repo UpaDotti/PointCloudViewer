@@ -14,10 +14,15 @@ public class MultiDrawRenderer : IDisposable
 
     private readonly MaterialPropertyBlock _mpb;
     private RenderParams _rp;
+    // 1画素点で描く時の描画パラメータ（点用マテリアルが未設定ならnull）
+    private RenderParams? _pointRp;
     private GraphicsBuffer _quadIndex;
     private GraphicsBuffer _commandBuffer;
+    // 1画素点用のコマンド（1点=1頂点の非Indexed形式。Quad用コマンドと同じ並び）
+    private GraphicsBuffer _pointCommandBuffer;
     private GraphicsBuffer _nodeDataBuffer;
     private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _commandArgs;
+    private readonly GraphicsBuffer.IndirectDrawArgs[] _pointCommandArgs;
     private readonly NodeDrawData[] _nodeDrawData;
     private readonly Bounds[] _pointSizeBoundsByCommand;
     private readonly Dictionary<int, int> _commandIndexByNode = new Dictionary<int, int>();
@@ -29,7 +34,7 @@ public class MultiDrawRenderer : IDisposable
     private static readonly int _minPixelSizeId = Shader.PropertyToID("_MinPixelSize");
     private static readonly int _maxPixelSizeId = Shader.PropertyToID("_MaxPixelSize");
 
-    public MultiDrawRenderer(Material pointMaterial, OpcFile file, GpuPointPool pool)
+    public MultiDrawRenderer(Material pointMaterial, Material pixelPointMaterial, OpcFile file, GpuPointPool pool)
     {
         _file = file;
         _pool = pool;
@@ -50,6 +55,14 @@ public class MultiDrawRenderer : IDisposable
         Vector3 rootCenter = (header.rootMin + header.rootMax) * 0.5f;
         _rp.worldBounds = new Bounds(rootCenter, header.rootMax - header.rootMin);
 
+        // 1画素点用の描画パラメータ（マテリアル以外はQuad用と同じ）
+        if (pixelPointMaterial != null)
+        {
+            RenderParams pointRp = _rp;
+            pointRp.material = pixelPointMaterial;
+            _pointRp = pointRp;
+        }
+
         // 点1つを表すQuad（三角形2枚）のインデックスバッファ
         uint[] index = { 0u, 1u, 2u, 2u, 1u, 3u };
         _quadIndex = new GraphicsBuffer(GraphicsBuffer.Target.Index, index.Length, sizeof(uint));
@@ -59,7 +72,9 @@ public class MultiDrawRenderer : IDisposable
         int maxNodes = file.Nodes.Length;
         _commandBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, maxNodes, GraphicsBuffer.IndirectDrawIndexedArgs.size);
         _nodeDataBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, maxNodes, System.Runtime.InteropServices.Marshal.SizeOf<NodeDrawData>());
+        _pointCommandBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, maxNodes, GraphicsBuffer.IndirectDrawArgs.size);
         _commandArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[maxNodes];
+        _pointCommandArgs = new GraphicsBuffer.IndirectDrawArgs[maxNodes];
         _nodeDrawData = new NodeDrawData[maxNodes];
         _pointSizeBoundsByCommand = new Bounds[maxNodes];
     }
@@ -105,6 +120,7 @@ public class MultiDrawRenderer : IDisposable
 
         // 今フレーム分のコマンドとノード描画データをGPUへ転送
         _commandBuffer.SetData(_commandArgs, 0, 0, commandCount);
+        _pointCommandBuffer.SetData(_pointCommandArgs, 0, 0, commandCount);
         _nodeDataBuffer.SetData(_nodeDrawData, 0, 0, commandCount);
 
         // 全ノード共通のパラメータを設定（ノード別パラメータは _NodeData から引く）
@@ -115,6 +131,12 @@ public class MultiDrawRenderer : IDisposable
         _mpb.SetFloat(_minPixelSizeId, minPixelSize);
         _mpb.SetFloat(_maxPixelSizeId, maxPixelSize);
         _rp.matProps = _mpb;
+        if (_pointRp.HasValue)
+        {
+            RenderParams pointRp = _pointRp.Value;
+            pointRp.matProps = _mpb;
+            _pointRp = pointRp;
+        }
 
         return commandCount;
     }
@@ -166,6 +188,24 @@ public class MultiDrawRenderer : IDisposable
         );
     }
 
+    /// <summary>
+    /// Prepareで詰めたコマンドを、全点1画素の点（1点=1頂点）として1回のマルチドローで描画する。
+    /// 点用マテリアルが未設定なら何もせずfalseを返す。
+    /// </summary>
+    public bool DrawDirectPixelPoints(int commandCount)
+    {
+        if (!_pointRp.HasValue) return false;
+
+        Graphics.RenderPrimitivesIndirect(
+            _pointRp.Value,
+            MeshTopology.Points,
+            _pointCommandBuffer,
+            commandCount,
+            0
+        );
+        return true;
+    }
+
     // 1ノード分の描画コマンドとノード描画データを配列に積み、積んだ後のコマンド数を返す
     private int AppendDrawCommand(PointStreamer streamer, int nodeIndex, Bounds pointSizeBounds, float pointSizeScale, int commandCount)
     {
@@ -185,6 +225,15 @@ public class MultiDrawRenderer : IDisposable
             instanceCount = instanceCount,
             startIndex = 0u,
             baseVertexIndex = 0u,
+            startInstance = 0u,
+        };
+
+        // 1画素点用の同じノードのコマンド（頂点番号=点番号）
+        _pointCommandArgs[commandCount] = new GraphicsBuffer.IndirectDrawArgs
+        {
+            vertexCountPerInstance = instanceCount,
+            instanceCount = 1u,
+            startVertex = 0u,
             startInstance = 0u,
         };
 
@@ -222,6 +271,9 @@ public class MultiDrawRenderer : IDisposable
 
         _commandBuffer?.Dispose();
         _commandBuffer = null;
+
+        _pointCommandBuffer?.Dispose();
+        _pointCommandBuffer = null;
 
         _nodeDataBuffer?.Dispose();
         _nodeDataBuffer = null;

@@ -14,6 +14,8 @@ public class OpcLoader : MonoBehaviour
     {
         Direct,
         Split,
+        // 全点を1画素の点（1点=1頂点）で直接描画する比較用モード
+        DirectPixelPoints,
     }
     [Header("File")]
     [SerializeField]
@@ -22,6 +24,10 @@ public class OpcLoader : MonoBehaviour
     [Header("Rendering")]
     [SerializeField]
     private Material _pointMaterial;
+
+    // DirectPixelPointsモード用のマテリアル（Custom/PointCloud_Point）
+    [SerializeField]
+    private Material _pixelPointMaterial;
 
     [SerializeField]
     private RenderMode _renderMode = RenderMode.Split;
@@ -64,6 +70,9 @@ public class OpcLoader : MonoBehaviour
     private GpuPointPool _pointPool;
     private PointStreamer _streamer;
     private MultiDrawRenderer _renderer;
+
+    // 点用マテリアル未設定の警告を出したか
+    private bool _warnedMissingPixelPointMaterial;
 
     // Profiler用マーカー（Unity ProfilerのCPU Usageに"OpcLoader.～"として表示される）
     private static readonly ProfilerMarker _markerGetVisibleNodes = new ProfilerMarker("OpcLoader.GetVisibleNodes");
@@ -108,7 +117,7 @@ public class OpcLoader : MonoBehaviour
                 fallbackQuality = _fallbackQuality,
             }
         );
-        _renderer = new MultiDrawRenderer(_pointMaterial, _file, _pointPool);
+        _renderer = new MultiDrawRenderer(_pointMaterial, _pixelPointMaterial, _file, _pointPool);
     }
 
     private void Update()
@@ -140,6 +149,18 @@ public class OpcLoader : MonoBehaviour
                 DisableSplitRenderBridge();
                 _renderer.DrawDirect(commandCount);
                 Benchmarker.Record("OpcLoader.Direct.DrawCalls", 1);
+                return;
+            }
+
+            if (_renderMode == RenderMode.DirectPixelPoints)
+            {
+                DisableSplitRenderBridge();
+                // 点用マテリアルが未設定なら描けないので知らせる（毎フレーム出さないよう1回だけ）
+                if (!_renderer.DrawDirectPixelPoints(commandCount) && !_warnedMissingPixelPointMaterial)
+                {
+                    Debug.LogWarning("OpcLoader: DirectPixelPointsモードですが、_pixelPointMaterialが未設定のため描画しません。");
+                    _warnedMissingPixelPointMaterial = true;
+                }
                 return;
             }
 
@@ -197,6 +218,7 @@ public class OpcLoader : MonoBehaviour
     {
         Benchmarker.Record("OpcLoader.Mode.Direct", _renderMode == RenderMode.Direct ? 1 : 0);
         Benchmarker.Record("OpcLoader.Mode.Split", _renderMode == RenderMode.Split ? 1 : 0);
+        Benchmarker.Record("OpcLoader.Mode.DirectPixelPoints", _renderMode == RenderMode.DirectPixelPoints ? 1 : 0);
         Benchmarker.Record("OpcLoader.Draw.Commands", commandCount);
         Benchmarker.Record("OpcLoader.Draw.Points", _renderer.LastPreparedPointCount);
         Benchmarker.Record("OpcLoader.Selection.Count", _selections.Count);
