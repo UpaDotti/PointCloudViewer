@@ -56,8 +56,9 @@ public class OpcGatherRenderFeature : ScriptableRendererFeature
     {
         _pass = new OpcGatherRenderPass(_fillMaterial, _resolveMaterial, _resolveCompute, _compositeMaterial)
         {
-            // 分割描画と同じく、URPのシーン描画が一通り終わった後に点群を描く
-            renderPassEvent = RenderPassEvent.AfterRenderingTransparents,
+            // 分割描画と同じく、不透明と空を描いた後・半透明の前に点群を描く
+            // （半透明が点群の深度で前後判定され、点群の手前にある半透明が点群に上書きされないようにする）
+            renderPassEvent = RenderPassEvent.BeforeRenderingTransparents,
         };
     }
 

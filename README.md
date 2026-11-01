@@ -40,7 +40,7 @@ LOD選択、Frustum Culling、Streaming、GraphicsBuffer、Indirect Drawを組�
 
 現在の依存:
 
-- `RenderPassEvent.AfterRenderingTransparents` を使い、通常のシーン描画後に分割描画点群を合成します。
+- `RenderPassEvent.BeforeRenderingTransparents` を使い、不透明と空の描画後・半透明の前に分割描画点群を合成します（集め直し方式も同じ）。半透明は点群の深度で前後判定されます。`_CameraDepthTexture`（不透明の直後にコピー）と `_CameraOpaqueTexture`（空の直後にコピー）には点群は入りません。
 - `RecordRenderGraph` で `UniversalResourceData.activeColorTexture` と `activeDepthTexture` を読み、現在のカメラの色・深度ターゲットへ点群の円を書き込みます。
 - 整列用の作業テクスチャは、そのフレームで使い切るためRender Graphの一時テクスチャにしています。
 - 点一覧と間接描画の引数は外部 `GraphicsBuffer` として保持し、毎フレーム `ImportBuffer` でRender Graphへ取り込みます。点一覧1本の容量は画面の画素数です。
