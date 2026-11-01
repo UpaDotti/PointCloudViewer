@@ -1,0 +1,85 @@
+// 集め直し方式の集め直しパス（compute版）。
+// 8x8画素の区画ごとに、区画＋周り GATHER_RADIUS 画素分の点を共有メモリへ1回だけ読み込み、
+// 各画素で「自分を覆う円のうち最も手前の点」を共有メモリ上で探す。
+// テクスチャ読み込みが1画素あたり約49か所×2枚から約4か所×2枚に減る。
+// 結果（色＋半径を詰めた値, 深度）は作業テクスチャへ書き、後段の合成パスがカメラへ書く。
+
+#pragma kernel Resolve
+
+// 調べる近傍の半径（ピクセル）。これより大きい円はこの半径で切れる
+#define GATHER_RADIUS 4
+// 1区画の一辺（numthreadsと一致させる）
+#define TILE_SIZE 8
+// 共有メモリへ読む範囲の一辺（区画＋両側の周り）
+#define CACHE_SIZE (TILE_SIZE + GATHER_RADIUS * 2)
+
+// 画面半径を8ビットから戻す時の倍率（点描きパスと一致させる）
+static const float RADIUS_SCALE = 16.0;
+
+// 点描きパスの出力（色＋画面半径を詰めた値。0は点なし / 深度）
+Texture2D<uint> _GatherPacked;
+Texture2D<float> _GatherDepth;
+// 結果（x=色＋半径を詰めた値。0は円に覆われない / y=深度のビット列）
+RWTexture2D<uint2> _GatherResult;
+// 画面の大きさ（画素）
+uint2 _GatherSize;
+// 反転Zか（1=手前ほど深度が大きい）
+uint _ReversedZ;
+
+// 区画＋周りの点（色＋半径 / 深度）
+groupshared uint _cachedPacked[CACHE_SIZE * CACHE_SIZE];
+groupshared float _cachedDepth[CACHE_SIZE * CACHE_SIZE];
+
+[numthreads(TILE_SIZE, TILE_SIZE, 1)]
+void Resolve(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID, uint threadIndex : SV_GroupIndex)
+{
+    // 区画＋周りを全スレッドで手分けして共有メモリへ読む（画面外は点なし）
+    int2 cacheOrigin = int2(groupId.xy * TILE_SIZE) - GATHER_RADIUS;
+    for (uint i = threadIndex; i < CACHE_SIZE * CACHE_SIZE; i += TILE_SIZE * TILE_SIZE)
+    {
+        int2 pixel = cacheOrigin + int2(i % CACHE_SIZE, i / CACHE_SIZE);
+        bool inside = all(pixel >= 0) && all(pixel < (int2)_GatherSize);
+        _cachedPacked[i] = inside ? _GatherPacked[pixel] : 0u;
+        _cachedDepth[i] = inside ? _GatherDepth[pixel] : 0.0;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // 自分の画素（画面外のスレッドは何もしない）
+    uint2 pixel = groupId.xy * TILE_SIZE + threadId.xy;
+    if (any(pixel >= _GatherSize)) return;
+
+    // 自分を覆う円のうち最も手前の点を探す
+    uint bestPacked = 0u;
+    float bestDepth = _ReversedZ ? 0.0 : 1.0;
+    int2 center = int2(threadId.xy) + GATHER_RADIUS;
+
+    [unroll]
+    for (int dy = -GATHER_RADIUS; dy <= GATHER_RADIUS; dy++)
+    {
+        [unroll]
+        for (int dx = -GATHER_RADIUS; dx <= GATHER_RADIUS; dx++)
+        {
+            // 半径の外は調べない
+            int distanceSquared = dx * dx + dy * dy;
+            if (distanceSquared > GATHER_RADIUS * GATHER_RADIUS) continue;
+
+            // 点が無い画素、または円がここまで届かない点は飛ばす
+            uint index = (uint)((center.y + dy) * CACHE_SIZE + center.x + dx);
+            uint packed = _cachedPacked[index];
+            if (packed == 0u) continue;
+            float radius = (float)(packed >> 24) / RADIUS_SCALE;
+            if ((float)distanceSquared > radius * radius) continue;
+
+            // より手前なら採用する
+            float depth = _cachedDepth[index];
+            bool nearer = _ReversedZ ? depth > bestDepth : depth < bestDepth;
+            if (nearer)
+            {
+                bestDepth = depth;
+                bestPacked = packed;
+            }
+        }
+    }
+
+    _GatherResult[pixel] = uint2(bestPacked, asuint(bestDepth));
+}

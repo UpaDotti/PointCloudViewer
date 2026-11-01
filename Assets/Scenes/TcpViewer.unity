@@ -199,6 +199,8 @@ MonoBehaviour:
   - OpcSplitFill
   - OpcSplitCompact
   - OpcSplitSplat
+  - OpcGatherFill
+  - OpcGatherResolve
 --- !u!114 &809290258
 MonoBehaviour:
   m_ObjectHideFlags: 0

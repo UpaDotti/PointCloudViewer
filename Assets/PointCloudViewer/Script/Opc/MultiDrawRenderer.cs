@@ -23,6 +23,10 @@ public class MultiDrawRenderer : IDisposable
     private GraphicsBuffer _nodeDataBuffer;
     private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _commandArgs;
     private readonly GraphicsBuffer.IndirectDrawArgs[] _pointCommandArgs;
+    // 円が大きいノードを先頭へ集める時の作業配列（毎フレームの割り当てを避けるため使い回す）
+    private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _sortedCommandArgs;
+    private readonly GraphicsBuffer.IndirectDrawArgs[] _sortedPointCommandArgs;
+    private readonly NodeDrawData[] _sortedNodeDrawData;
     private readonly NodeDrawData[] _nodeDrawData;
     private readonly Bounds[] _pointSizeBoundsByCommand;
     private readonly Dictionary<int, int> _commandIndexByNode = new Dictionary<int, int>();
@@ -75,6 +79,9 @@ public class MultiDrawRenderer : IDisposable
         _pointCommandBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, maxNodes, GraphicsBuffer.IndirectDrawArgs.size);
         _commandArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[maxNodes];
         _pointCommandArgs = new GraphicsBuffer.IndirectDrawArgs[maxNodes];
+        _sortedCommandArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[maxNodes];
+        _sortedPointCommandArgs = new GraphicsBuffer.IndirectDrawArgs[maxNodes];
+        _sortedNodeDrawData = new NodeDrawData[maxNodes];
         _nodeDrawData = new NodeDrawData[maxNodes];
         _pointSizeBoundsByCommand = new Bounds[maxNodes];
     }
@@ -92,6 +99,9 @@ public class MultiDrawRenderer : IDisposable
     /// <summary>直近のPrepareで詰めた合計描画点数</summary>
     public long LastPreparedPointCount { get; private set; }
 
+    /// <summary>直近のPrepareで先頭へ集めた「円が大きいノード」のコマンド数（並べ替えなしなら0）</summary>
+    public int LargeCommandCount { get; private set; }
+
     /// <summary>ロード済みノードを1回のマルチドローでカメラへ直接描画する</summary>
     public void Draw(PointStreamer streamer, List<NodeSelection> selections, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
     {
@@ -104,11 +114,17 @@ public class MultiDrawRenderer : IDisposable
     /// 描画コマンドとノード描画データを詰めてGPUへ転送し、共通パラメータを設定する。
     /// 実際の描画は行わず、コマンド数を返す（直接描画/分割描画の両方の前段で使う）。
     /// </summary>
-    public int Prepare(PointStreamer streamer, List<NodeSelection> selections, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
+    /// <param name="largePixelRadius">
+    /// 0より大きければ、画面半径がこの値を超えうるノードのコマンドを先頭へ集め、その数を LargeCommandCount に入れる。
+    /// 0以下なら並べ替えず、LargeCommandCount は0。
+    /// </param>
+    public int Prepare(PointStreamer streamer, List<NodeSelection> selections, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale,
+        float largePixelRadius = 0f)
     {
         // ロード済みノードの描画コマンドとノード描画データを詰める
         int commandCount = 0;
         LastPreparedPointCount = 0;
+        LargeCommandCount = 0;
         _commandIndexByNode.Clear();
         for (int i = 0; i < selections.Count; i++)
         {
@@ -117,6 +133,12 @@ public class MultiDrawRenderer : IDisposable
 
         // 描画対象が無ければ転送もしない
         if (commandCount == 0) return 0;
+
+        // 円が大きいノードを先頭へ集める（集め直し方式では先頭の範囲だけQuadで描くため）
+        if (largePixelRadius > 0f)
+        {
+            LargeCommandCount = MoveLargeCommandsToFront(commandCount, camera, maxPixelSize, largePixelRadius);
+        }
 
         // 今フレーム分のコマンドとノード描画データをGPUへ転送
         _commandBuffer.SetData(_commandArgs, 0, 0, commandCount);
@@ -139,6 +161,50 @@ public class MultiDrawRenderer : IDisposable
         }
 
         return commandCount;
+    }
+
+    /// <summary>
+    /// ノード中心での画面半径がしきい値を超えるコマンドを、順番を保ったまま先頭へ集め、その数を返す。
+    /// 半径はシェーダと同じ式（ワールド半径 × 変換係数 ÷ 奥行き、上限maxPixelSize）で、奥行きはノード中心の値を使う。
+    /// </summary>
+    private int MoveLargeCommandsToFront(int commandCount, in CameraState camera, float maxPixelSize, float largePixelRadius)
+    {
+        // 大きいコマンド → 小さいコマンドの順に作業配列へ写す（2回走査して順番を保つ）
+        int writeIndex = 0;
+        for (int pass = 0; pass < 2; pass++)
+        {
+            bool wantLarge = pass == 0;
+            for (int i = 0; i < commandCount; i++)
+            {
+                if (IsLargeCommand(i, camera, maxPixelSize, largePixelRadius) != wantLarge) continue;
+                _sortedCommandArgs[writeIndex] = _commandArgs[i];
+                _sortedPointCommandArgs[writeIndex] = _pointCommandArgs[i];
+                _sortedNodeDrawData[writeIndex] = _nodeDrawData[i];
+                writeIndex++;
+            }
+            if (wantLarge) LargeCommandCount = writeIndex;
+        }
+
+        // 作業配列を本体へ戻す
+        Array.Copy(_sortedCommandArgs, _commandArgs, commandCount);
+        Array.Copy(_sortedPointCommandArgs, _pointCommandArgs, commandCount);
+        Array.Copy(_sortedNodeDrawData, _nodeDrawData, commandCount);
+        return LargeCommandCount;
+    }
+
+    // コマンドのノードで、中心の奥行きでの画面半径がしきい値を超えるか
+    // （手前側の奥行きで判定すると近くのノードがほぼ全部Quadに回り、点の半数以上がQuadになったため中心で判定する）
+    private bool IsLargeCommand(int commandIndex, in CameraState camera, float maxPixelSize, float largePixelRadius)
+    {
+        NodeDrawData node = _nodeDrawData[commandIndex];
+        Vector3 center = (node.boundsMin + node.boundsMax) * 0.5f;
+
+        // ノード中心の奥行き（カメラの近く・背後は下限でクランプ）
+        float centerDepth = Vector3.Dot(center - camera.position, camera.forward);
+        if (centerDepth < camera.minDepth) centerDepth = camera.minDepth;
+
+        float pixelRadius = Mathf.Min(node.worldRadius * camera.worldToPixel / centerDepth, maxPixelSize);
+        return pixelRadius > largePixelRadius;
     }
 
     /// <summary>選択ノードが未ロードなら、ロード済みの親ノードを代替描画する。</summary>
@@ -177,14 +243,21 @@ public class MultiDrawRenderer : IDisposable
     /// <summary>Prepareで詰めたコマンドを1回のマルチドローでカメラへ直接描画する</summary>
     public void DrawDirect(int commandCount)
     {
-        // 全ノードを1回のマルチドローで描画
+        DrawDirectRange(0, commandCount);
+    }
+
+    /// <summary>Prepareで詰めたコマンドのうち、startCommandからcommandCount個だけQuadで描画する</summary>
+    public void DrawDirectRange(int startCommand, int commandCount)
+    {
+        if (commandCount <= 0) return;
+        // 指定範囲のノードを1回のマルチドローで描画
         Graphics.RenderPrimitivesIndexedIndirect(
             _rp,
             MeshTopology.Triangles,
             _quadIndex,
             _commandBuffer,
             commandCount,
-            0
+            startCommand
         );
     }
 

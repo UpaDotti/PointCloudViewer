@@ -17,6 +17,24 @@ MonoBehaviour:
   _splatMaterial: {fileID: 2100000, guid: cb153530a95bb7446850b48a73f6fcc3, type: 2}
   _compactShader: {fileID: 7200000, guid: 1c4cf067d07fb10468bddb49d91dbbca, type: 3}
   _splitCount: 4
+--- !u!114 &-1178148139144493657
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 914642761aca08a41ad487c168f4af78, type: 3}
+  m_Name: OpcGatherRenderFeature
+  m_EditorClassIdentifier: Assembly-CSharp::OpcGatherRenderFeature
+  m_Active: 1
+  _fillMaterial: {fileID: 2100000, guid: e32251bea87be6b4698f29a52c9fef37, type: 2}
+  _resolveMaterial: {fileID: 2100000, guid: 7a0409b2e712c5e439a4a4c049ee3c08, type: 2}
+  _useComputeResolve: 1
+  _resolveCompute: {fileID: 7200000, guid: cc7118cd3594c3741b2774d024fed6af, type: 3}
+  _compositeMaterial: {fileID: 2100000, guid: 49b2b7d8e43114842a1d3a56dbe133a1, type: 2}
 --- !u!114 &11400000
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -44,7 +62,8 @@ MonoBehaviour:
   m_RendererFeatures:
   - {fileID: 7833122117494664109}
   - {fileID: -2301898570450142370}
-  m_RendererFeatureMap: ad6b866f10d7b46c5efb563772030ee0
+  - {fileID: -1178148139144493657}
+  m_RendererFeatureMap: ad6b866f10d7b46c5efb563772030ee0a74581718260a6ef
   m_UseNativeRenderPass: 1
   xrSystemData: {fileID: 0}
   postProcessData: {fileID: 11400000, guid: 41439944d30ece34e96484bdb6645b55, type: 2}
