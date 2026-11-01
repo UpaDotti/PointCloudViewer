@@ -30,11 +30,13 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 | 知りたいこと | 文書 |
 | --- | --- |
+| 次にやること・人の判断待ち | [次にやること](docs/status.md) |
 | 仕組み（処理の流れ・クラス・データの形・設計判断） | [点群の変換から描画まで](docs/point-cloud-processing-flow.md) |
 | 分割描画の実装・計測・URP / Render Graphの制約 | [分割描画検証](docs/split-render-validation.md) |
 | 集め直し方式の実装・計測 | [集め直し方式](docs/gather-prototype.md) |
 | 1億点超データの出所と再現条件 | [1億点超データの出所](docs/hundred-million-point-reproduction.md) |
 | 何が重いか（フレーム時間の内訳、頂点処理で詰まっている根拠） | [フレーム時間の原因分析](docs/profiler-frame-analysis.md) |
+| AIへの作業指示 | [CLAUDE.md](CLAUDE.md) |
 
 ## 動かし方
 
