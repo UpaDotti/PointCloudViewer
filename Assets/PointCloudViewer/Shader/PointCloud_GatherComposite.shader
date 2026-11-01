@@ -4,7 +4,7 @@ Shader "Custom/PointCloud_GatherComposite"
     // computeが書いた結果（色＋半径, 深度）をカメラの色と深度へ書き写す。円に覆われない画素は書かない。
     SubShader
     {
-        Tags { "RenderType"="Opaque" "RenderPipeline"="UniversalRenderPipeline" }
+        Tags { "RenderType"="Opaque" "RenderPipeline"="UniversalPipeline" }
         ZWrite On
         ZTest LEqual
         Blend Off

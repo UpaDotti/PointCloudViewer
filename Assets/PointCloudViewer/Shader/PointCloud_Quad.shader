@@ -2,7 +2,7 @@ Shader "Custom/PointCloud_Quad"
 {
     SubShader
     {
-        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalRenderPipeline" }
+        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalPipeline" }
         ZWrite On
         ZTest LEqual
         Blend Off

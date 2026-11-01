@@ -5,7 +5,7 @@ Shader "Custom/PointCloud_Point"
     // 点の大きさは常に1画素で、点サイズの式は使わない。
     SubShader
     {
-        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalRenderPipeline" }
+        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalPipeline" }
         ZWrite On
         ZTest LEqual
         Blend Off

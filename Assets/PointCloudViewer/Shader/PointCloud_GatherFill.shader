@@ -5,7 +5,7 @@ Shader "Custom/PointCloud_GatherFill"
     // 出力は「色＋画面半径」を詰めた値と深度で、後段の集め直しパスが円として描き直す。
     SubShader
     {
-        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalRenderPipeline" }
+        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalPipeline" }
         ZWrite On
         ZTest LEqual
         Blend Off

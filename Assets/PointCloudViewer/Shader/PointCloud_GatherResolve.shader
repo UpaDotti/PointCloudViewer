@@ -5,7 +5,7 @@ Shader "Custom/PointCloud_GatherResolve"
     // どの円にも覆われない画素は書かない（シーンの色と深度を残す）。
     SubShader
     {
-        Tags { "RenderType"="Opaque" "RenderPipeline"="UniversalRenderPipeline" }
+        Tags { "RenderType"="Opaque" "RenderPipeline"="UniversalPipeline" }
         ZWrite On
         ZTest LEqual
         Blend Off

@@ -5,7 +5,7 @@ Shader "Custom/PointCloud_CacheSplat"
     // 円の大きさは直接描画（PointCloud_Circle）と同じ式で毎フレーム求め直す。
     SubShader
     {
-        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalRenderPipeline" }
+        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalPipeline" }
         ZWrite On
         ZTest LEqual
         Blend Off

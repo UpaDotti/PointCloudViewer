@@ -5,7 +5,7 @@ Shader "Custom/PointCloud_SplitFill"
     // 出力はワールド座標＋ワールド半径と色で、後段のcomputeが点一覧へ詰め直す。
     SubShader
     {
-        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalRenderPipeline" }
+        Tags { "RenderType"="Opaque" "Queue"="Geometry" "RenderPipeline"="UniversalPipeline" }
         ZWrite On
         ZTest LEqual
         Blend Off
