@@ -34,21 +34,37 @@ LAS（実座標 + 16-bit RGB）
                   → IndirectDrawArgs + NodeDrawDataをGraphicsBufferへ転送
                4. 描画モード分岐
                   ├─ Direct: 1回のRenderPrimitivesIndexedIndirectで全コマンドを描画
-                  └─ Split: OpcSplitRenderFeatureへ受け渡し
-                     → 毎フレーム1/N点を1画素の点として整列（1画素1点）
-                     → 点のある画素を点一覧へ詰め直し（N本保持）
-                     → 全N本の点一覧を現在のカメラで円として描画
+                  ├─ Split: OpcSplitRenderFeatureへ受け渡し
+                  │  → 毎フレーム1/N点を1画素の点として整列（1画素1点）
+                  │  → 点のある画素を点一覧へ詰め直し（N本保持）
+                  │  → 全N本の点一覧を現在のカメラで円として描画
+                  ├─ DirectPixelPoints（比較用）: 全点を1画素の点（1点1頂点）で直接描画
+                  └─ Gather（試作）: OpcGatherRenderFeatureへ受け渡し
+                     → 円が集め直し半径（4画素）を超えるノードだけQuadで直接描画
+                     → 残りの全点を1画素の点として作業テクスチャへ描画（1画素1点）
+                     → computeで各画素の周り4画素の点から自分を覆う最も手前の円を集め直し
+                     → 結果をカメラの色と深度へ書き写す
 ```
+
+## 描画モード
+
+| モード | 位置づけ | 円の作り方 |
+| --- | --- | --- |
+| Direct | 基準 | 1点を4頂点のQuadで描く |
+| Split | 検証中 | 1/Nずつ作り直す点一覧N本を、Quadで円として描く |
+| DirectPixelPoints | 比較用 | 円を作らない（1画素点のみ。手前の面が透ける） |
+| Gather | 試作 | 1画素点を描いた後、画面上で周りの円を集め直す |
 
 ## 主要クラスの責務
 
 | クラス | 責務 | ファイル |
 | --- | --- | --- |
-| `OpcLoader` | OPC経路の合成ルート。初期化し、毎フレーム `選択 → Streaming → Prepare → Direct/Split` の順で呼ぶ | `Assets/PointCloudViewer/Script/Opc/OpcLoader.cs` |
+| `OpcLoader` | OPC経路の合成ルート。初期化し、毎フレーム `選択 → Streaming → Prepare → 描画モード分岐` の順で呼ぶ | `Assets/PointCloudViewer/Script/Opc/OpcLoader.cs` |
 | `NodeLodSelector` | Octreeの可視走査、画面占有面積に基づく降下判定、Point Budgetのwater-filling配分 | `Assets/PointCloudViewer/Script/Opc/NodeLodSelector.cs` |
 | `PointStreamer` | ノード常駐状態、非同期ロード要求、GPUプールへのアップロード、fallback親の維持、遅延アンロードを管理 | `Assets/PointCloudViewer/Script/Opc/PointStreamer.cs` |
-| `MultiDrawRenderer` | 常駐点からIndirect Drawコマンドとノード別復元情報を構築し、Direct描画またはSplit描画へ提供 | `Assets/PointCloudViewer/Script/Opc/MultiDrawRenderer.cs` |
+| `MultiDrawRenderer` | 常駐点からIndirect Drawコマンドとノード別復元情報を構築し、各描画モードへ提供する。Gatherでは円が大きいノードのコマンドを先頭へ集める | `Assets/PointCloudViewer/Script/Opc/MultiDrawRenderer.cs` |
 | `OpcSplitRenderFeature` | URP Render Graphに分割描画パスを追加し、1本の点一覧の作り直しと、全点一覧の円描画を行う | `Assets/PointCloudViewer/Script/Opc/SplitRender/OpcSplitRenderFeature.cs` |
+| `OpcGatherRenderFeature` | URP Render Graphに集め直し方式のパス（点描き → 集め直し → 書き写し）を追加する | `Assets/PointCloudViewer/Script/Opc/GatherRender/OpcGatherRenderFeature.cs` |
 
 補助クラスは、`OpcFile` がOPC索引、`OpcPointLoadWorker` がワーカースレッド上のファイル読込と12 byte形式へのパック、`GpuPointPool` が共有 `GraphicsBuffer` の確保・解放・転送を担当する。
 
@@ -63,12 +79,15 @@ LAS（実座標 + 16-bit RGB）
 | 描画準備後 | `IndirectDrawIndexedArgs` と `NodeDrawData(boundsMin/max, worldRadius, pointStart)` |
 | シェーダ出力 | 量子化座標をboundsで復元し、1点をQuadとしてDirect経路で描画 |
 | 点一覧（Split） | 1画素1点に絞った点ごとのワールド座標・Color32・ワールド半径（20 byte/点）。N本を保持し、Quadとして描画 |
+| 作業テクスチャ（Gather） | 1画素1点に絞った色と画面半径を詰めた値（R32_UInt）と深度。集め直しの結果は色と深度（R32G32_UInt）。そのフレームで使い切る |
 
 ## 設計上の要点と制約
 
 - 枝の代表点で必要密度を満たせる場合は子へ降りず、足りない場合だけOctreeを降りる。可視ノード間の点数はPoint Budget内で画面占有面積に応じて配分する。
 - ストリーミングは要求点数の2倍を先読みし、追加ロード中も旧データまたは常駐親を描いて欠落を抑える。共有GPUプールが満杯なら視界外ノードを解放して再試行する。
-- Directは全ノードを1回のマルチドローで描く。Splitは点を`SplitCount`本の点一覧へ分散して1フレームの整列量を減らし、1画素1点に間引いて表示する点の数も減らす。一方、点一覧の本数に比例して表示Draw callと保持バッファが増え、間引きのため静止時でもDirectと約0.2%の画素が異なる。
+- Directは全ノードを1回のマルチドローで描く。Splitは点を`SplitCount`本の点一覧へ分散して1フレームの整列量を減らし、1画素1点に間引いて表示する点の数も減らす。一方、点一覧の本数に比例して表示Draw callと保持バッファが増え、間引きのため静止時でもDirectと一部の画素が異なる（記録は0.06%、1280x720）。
+- SplitとGatherはURP Render Graphのパスとして、不透明と空の描画後・半透明の前（`BeforeRenderingTransparents`）にカメラの色と深度へ書き込む。DirectとDirectPixelPointsは `OpcLoader.Update` から直接描画する。
+- Gatherは、内蔵GPUで詰まっている頂点処理（1点4頂点）を、1点1頂点と画素数に比例する集め直しへ置き換える試み。集め直し半径（4画素）は `OpcLoader.GatherRadiusPixels` と2つのシェーダの `GATHER_RADIUS` で揃える必要がある。
 
 ## 設計判断（LOD / Culling / Streaming）
 
@@ -86,6 +105,7 @@ LAS（実座標 + 16-bit RGB）
 
 - 変換スクリプトとViewerを連続実行したE2E再現、OPC/TPCファイル仕様の独立した互換性試験、破損ファイル試験は未確認。
 - `max_depth=8`、葉20万点、枝3万点、OPC 9 byte/点は現行既定値であり、別設定・別データセットでの品質と性能は未確認。
+- Gatherはエディタ上でのみ確認している。ビルドでの描画と計測、カメラ移動時の見た目は未確認。測定値は `docs/gather-prototype.md` を参照する。
 - TPCは旧経路の位置づけとデータ遷移のみを示す。現在のDirect/Split比較、共有GPUプール、Octree代表点fallbackはOPC経路が対象。
 - シェーダ内部の色変換、アンチエイリアス品質、GPU各パスの専用時間、1億点表示の再現条件はこの文書の対象外。分割描画の確認済み条件と測定値は `docs/split-render-validation.md` を参照する。
 
