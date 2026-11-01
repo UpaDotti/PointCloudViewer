@@ -29,6 +29,6 @@ OPC本体は約67.9GBのためリポジトリには含めない。第三者向�
 
 ## Viewerでの結果
 
-Point Budgetを約400万点に設定し、LOD、Frustum Culling、Streamingを通して描画した。既存の固定カメラ経路では、準備済み描画点数が平均約467万〜522万点、Split count 4の平均フレーム時間が16.85〜18.23msだった。
+Point Budgetを約400万点に設定し、LOD、Frustum Culling、Streamingを通して描画した。既存の固定カメラ経路では、準備済み描画点数が平均約467万〜522万点、Split count 4の平均フレーム時間が16.85〜18.23msだった（2026-07、旧画像スライス方式での計測。現在の点キャッシュ方式では未計測）。
 
 条件と比較値は[分割描画検証](split-render-validation.md)、処理の仕組みは[点群の変換から描画まで](point-cloud-processing-flow.md)に記録している。

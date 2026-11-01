@@ -13,10 +13,10 @@ MonoBehaviour:
   m_Name: OpcSplitRenderFeature
   m_EditorClassIdentifier: Assembly-CSharp::OpcSplitRenderFeature
   m_Active: 1
-  _pointSplitMaterial: {fileID: 2100000, guid: c72356b52f6321446a9ab5c26912fcac, type: 2}
-  _compositeMaterial: {fileID: 2100000, guid: af798b090fdc1554692e63e07041cf29, type: 2}
+  _fillMaterial: {fileID: 2100000, guid: 0ef7192d73d646b49ad358d7fe16678b, type: 2}
+  _splatMaterial: {fileID: 2100000, guid: cb153530a95bb7446850b48a73f6fcc3, type: 2}
+  _compactShader: {fileID: 7200000, guid: 1c4cf067d07fb10468bddb49d91dbbca, type: 3}
   _splitCount: 4
-  _warpTolerance: 0.02
 --- !u!114 &11400000
 MonoBehaviour:
   m_ObjectHideFlags: 0

@@ -1,0 +1,76 @@
+// 点キャッシュ方式の詰め直しパス。
+// 整列パスの出力（1画素1点）から点のある画素だけを集め、点一覧バッファへ書き出す。
+// 書き出した点数は間接描画の引数（instanceCount）へ加算する。
+// 画素は行順ではなく全体にばらけた順で走査する。行順に詰めると重なり合う円が連続して描かれ、
+// 同じ画素への書き込み待ちで表示パスが大きく遅くなるため。
+
+#pragma kernel ResetArgs
+#pragma kernel Compact
+
+// 点一覧の1点（C#側のCachePointと並びを一致させる）
+struct CachePoint
+{
+    float3 position;    // ワールド座標
+    uint   color;       // Color32そのまま
+    float  worldRadius; // 1点が覆うべきワールド半径
+};
+
+// 整列パスの出力（xyz=ワールド座標, w=ワールド半径。w>0が点あり）と色
+Texture2D<float4> _FillPositionRadius;
+Texture2D<uint> _FillColor;
+// 整列テクスチャの大きさ（画素番号→座標の変換に使う）
+uint2 _FillSize;
+// 走査順のかき混ぜ係数（画素数と互いに素。画素番号×係数 mod 画素数 で全画素を1回ずつ回る）
+uint _ScrambleMultiplier;
+// X方向のスレッドグループ数（2次元ディスパッチから通し番号を復元するため）
+uint _GroupsX;
+
+// 書き出し先の点一覧と、間接描画の引数（IndirectDrawIndexedArgs: 5つのuint）
+RWStructuredBuffer<CachePoint> _Cache;
+RWStructuredBuffer<uint> _Args;
+
+// 間接描画の引数を初期化する（Quad=6インデックス、点数0から数え始める）
+[numthreads(1, 1, 1)]
+void ResetArgs()
+{
+    _Args[0] = 6u;   // indexCountPerInstance
+    _Args[1] = 0u;   // instanceCount（Compactで加算する）
+    _Args[2] = 0u;   // startIndex
+    _Args[3] = 0u;   // baseVertexIndex
+    _Args[4] = 0u;   // startInstance
+}
+
+// a×b mod n を32ビット整数で求める（a, b, n は 2^24 未満。aを8ビットずつ分けて桁あふれを防ぐ）
+uint MulMod(uint a, uint b, uint n)
+{
+    uint r = ((a >> 16) * b) % n;
+    r = ((r << 8) % n + (((a >> 8) & 0xFFu) * b) % n) % n;
+    r = ((r << 8) % n + ((a & 0xFFu) * b) % n) % n;
+    return r;
+}
+
+// 点のある画素を点一覧へ詰める（容量は画素数なので溢れない）
+[numthreads(64, 1, 1)]
+void Compact(uint3 groupId : SV_GroupID, uint3 threadId : SV_GroupThreadID)
+{
+    // 通し番号を、ばらけた順の画素番号へ変換する（はみ出したスレッドは何もしない）
+    uint pixelCount = _FillSize.x * _FillSize.y;
+    uint linearIndex = (groupId.y * _GroupsX + groupId.x) * 64u + threadId.x;
+    if (linearIndex >= pixelCount) return;
+    uint pixelIndex = MulMod(linearIndex, _ScrambleMultiplier, pixelCount);
+    uint2 pixel = uint2(pixelIndex % _FillSize.x, pixelIndex / _FillSize.x);
+
+    // 点の無い画素は何もしない
+    float4 positionRadius = _FillPositionRadius[pixel];
+    if (positionRadius.w <= 0.0) return;
+
+    // 書き込み位置を確保して点を書き出す
+    uint index;
+    InterlockedAdd(_Args[1], 1u, index);
+
+    CachePoint cachePoint;
+    cachePoint.position = positionRadius.xyz;
+    cachePoint.color = _FillColor[pixel];
+    cachePoint.worldRadius = positionRadius.w;
+    _Cache[index] = cachePoint;
+}

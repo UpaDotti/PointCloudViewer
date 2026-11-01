@@ -1,5 +1,7 @@
 # 1フレーム原因分析
 
+> この分析は2026-07時点の旧画像スライス方式で取得したものです。`OpcSplitDraw` と `OpcSplitComposite` は旧方式のパス名で、2026-10の点キャッシュ方式（`OpcSplitFill`、`OpcSplitCompact`、`OpcSplitSplat`）では計測し直していません。
+
 ## 計測条件
 
 - `BenchmarkSession (capture=60fps)`

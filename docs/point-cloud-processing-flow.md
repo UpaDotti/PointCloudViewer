@@ -35,8 +35,9 @@ LAS（実座標 + 16-bit RGB）
                4. 描画モード分岐
                   ├─ Direct: 1回のRenderPrimitivesIndexedIndirectで全コマンドを描画
                   └─ Split: OpcSplitRenderFeatureへ受け渡し
-                     → 毎フレーム1/N点を永続スライスへ描画
-                     → 全有効スライスを現在VPへ再投影し、深度合成
+                     → 毎フレーム1/N点を1画素の点として整列（1画素1点）
+                     → 点のある画素を点一覧へ詰め直し（N本保持）
+                     → 全N本の点一覧を現在のカメラで円として描画
 ```
 
 ## 主要クラスの責務
@@ -47,7 +48,7 @@ LAS（実座標 + 16-bit RGB）
 | `NodeLodSelector` | Octreeの可視走査、画面占有面積に基づく降下判定、Point Budgetのwater-filling配分 | `Assets/PointCloudViewer/Script/Opc/NodeLodSelector.cs` |
 | `PointStreamer` | ノード常駐状態、非同期ロード要求、GPUプールへのアップロード、fallback親の維持、遅延アンロードを管理 | `Assets/PointCloudViewer/Script/Opc/PointStreamer.cs` |
 | `MultiDrawRenderer` | 常駐点からIndirect Drawコマンドとノード別復元情報を構築し、Direct描画またはSplit描画へ提供 | `Assets/PointCloudViewer/Script/Opc/MultiDrawRenderer.cs` |
-| `OpcSplitRenderFeature` | URP Render Graphに分割描画パスを追加し、1スライスの更新と保存済みスライスの再投影・深度合成を行う | `Assets/PointCloudViewer/Script/Opc/SplitRender/OpcSplitRenderFeature.cs` |
+| `OpcSplitRenderFeature` | URP Render Graphに分割描画パスを追加し、1本の点一覧の作り直しと、全点一覧の円描画を行う | `Assets/PointCloudViewer/Script/Opc/SplitRender/OpcSplitRenderFeature.cs` |
 
 補助クラスは、`OpcFile` がOPC索引、`OpcPointLoadWorker` がワーカースレッド上のファイル読込と12 byte形式へのパック、`GpuPointPool` が共有 `GraphicsBuffer` の確保・解放・転送を担当する。
 
@@ -60,13 +61,14 @@ LAS（実座標 + 16-bit RGB）
 | CPUロード後 | `PackedPoint12`。`xy`、`z`、`rgba` の3つの`uint`へ再パック（12 byte/点） |
 | GPU常駐後 | 全ノード共有のStructured `GraphicsBuffer`。各ノードは`poolStart`と`loadedCount`で領域を指す |
 | 描画準備後 | `IndirectDrawIndexedArgs` と `NodeDrawData(boundsMin/max, worldRadius, pointStart)` |
-| シェーダ出力 | 量子化座標をboundsで復元し、1点をQuadとしてDirectまたはSplit経路で描画 |
+| シェーダ出力 | 量子化座標をboundsで復元し、1点をQuadとしてDirect経路で描画 |
+| 点一覧（Split） | 1画素1点に絞った点ごとのワールド座標・Color32・ワールド半径（20 byte/点）。N本を保持し、Quadとして描画 |
 
 ## 設計上の要点と制約
 
 - 枝の代表点で必要密度を満たせる場合は子へ降りず、足りない場合だけOctreeを降りる。可視ノード間の点数はPoint Budget内で画面占有面積に応じて配分する。
 - ストリーミングは要求点数の2倍を先読みし、追加ロード中も旧データまたは常駐親を描いて欠落を抑える。共有GPUプールが満杯なら視界外ノードを解放して再試行する。
-- Directは全ノードを1回のマルチドローで描く。Splitは点を`SplitCount`枚へ分散するため1フレームの点描画量を減らす一方、保存スライス数に比例して合成Draw callと履歴バッファが増える。
+- Directは全ノードを1回のマルチドローで描く。Splitは点を`SplitCount`本の点一覧へ分散して1フレームの整列量を減らし、1画素1点に間引いて表示する点の数も減らす。一方、点一覧の本数に比例して表示Draw callと保持バッファが増え、間引きのため静止時でもDirectと約0.2%の画素が異なる。
 
 ## 設計判断（LOD / Culling / Streaming）
 
@@ -76,7 +78,7 @@ LAS（実座標 + 16-bit RGB）
 | Frustum外ノードを選択対象から除外 | GPU転送・描画コマンドの対象を可視範囲に限定し、1億点級でも常駐量を抑える | 全ノード走査・描画はメモリと帯域を先に消費する | `NodeLodSelector`、`CameraState` |
 | 親代表点をfallbackとして常駐 | 子LODの非同期読込中も穴を作らず、カメラ移動時の見た目を連続させる | 同期ロードは表示を止める。fallbackなしはロード待ちの欠落を生む | `PointStreamer`、`MultiDrawRenderer` |
 | 共有GPUプール + 遅延アンロード | ノードごとのBuffer乱立を避け、ロード済み点を再利用できる | ノードごとの専用Bufferは管理・割当が増え、視点移動で断片化しやすい | `GpuPointPool`、`PointPoolAllocator` |
-| Direct / Splitを分離 | 通常時はマルチドローで低オーバーヘッド、連続更新時はSplitで1フレームの更新点数を制限できる | Split固定は履歴合成コスト、Direct固定は更新スパイクを許容する | `MultiDrawRenderer`、`OpcSplitRenderFeature` |
+| Direct / Splitを分離 | 通常時はマルチドローで低オーバーヘッド、連続更新時はSplitで1フレームの更新点数を制限できる | Split固定は点一覧の保持・表示コスト、Direct固定は更新スパイクを許容する | `MultiDrawRenderer`、`OpcSplitRenderFeature` |
 
 この設計は「全点を同時にGPUへ載せる」のではなく、可視性・投影密度・Point Budgetを先に決め、必要な点だけを段階的に常駐させる方針である。したがって性能評価では、OPC総点数と同時描画点数を分けて記録する。
 
