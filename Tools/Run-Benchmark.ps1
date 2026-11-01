@@ -3,18 +3,18 @@
   Unity CLI で計測用プレイヤーをビルドし、描画モードごとに自動計測して結果を並べる。
 
 .EXAMPLE
-  # ビルドしてから Direct と Compute を計測する
+  # ビルドしてから Direct・Split・Gather を計測する
   powershell -ExecutionPolicy Bypass -File Tools/Run-Benchmark.ps1 -Build
 
 .EXAMPLE
-  # ビルド済みのプレイヤーで Compute だけ計測する
-  powershell -ExecutionPolicy Bypass -File Tools/Run-Benchmark.ps1 -Modes Compute
+  # ビルド済みのプレイヤーで Gather だけ計測する
+  powershell -ExecutionPolicy Bypass -File Tools/Run-Benchmark.ps1 -Modes Gather
 #>
 param(
     # 先にプレイヤーをビルドする（コードやシェーダを変えた後は付ける）
     [switch]$Build,
     # 計測する描画モード（OpcLoader.RenderMode の名前）
-    [string[]]$Modes = @("Direct", "Compute"),
+    [string[]]$Modes = @("Direct", "Split", "Gather"),
     # 計測するOPCファイル（既定はプロジェクトの Assets/sample.opc）
     [string]$OpcPath = "",
     # 画面サイズ（計測条件をそろえるため固定する）
@@ -92,8 +92,12 @@ if ($Build) { Invoke-PlayerBuild }
 if (-not (Test-Path $playerPath)) { throw "プレイヤーがありません。-Build を付けて実行してください: $playerPath" }
 if (-not (Test-Path $OpcPath)) { throw "OPCファイルがありません: $OpcPath" }
 
+# -File 実行では "Direct,Gather" が1つの文字列で届くため、カンマで1モードずつに分ける
+# （分けずに渡すと、プレイヤー側の Enum.TryParse がビットORで解釈して別モードを測る）
+$modeNames = @($Modes | ForEach-Object { $_ -split "," } | ForEach-Object { $_.Trim() } | Where-Object { $_ -ne "" })
+
 # 各モードを順に計測し、まとめてファイルにも残す
-$results = foreach ($mode in $Modes) { Invoke-Measurement $mode }
+$results = foreach ($mode in $modeNames) { Invoke-Measurement $mode }
 $summary = ($results -join "`n`n")
 $summaryPath = Join-Path $outputDir "summary.txt"
 Set-Content -Path $summaryPath -Value $summary -Encoding UTF8
