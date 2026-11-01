@@ -17,6 +17,19 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 ## 最新の計測
 
+### ビルド
+
+2026-11-02、Windowsプレイヤー（通常ビルド、D3D11、Intel UHD）、`Tools/Run-Benchmark.ps1`（`CameraOrbitMover` + `BenchmarkSession (capture=60fps)`、570フレーム、1920x1080の窓）、`Assets/sample.opc`、コミット 310e1b7。4モードを順に4回測った平均フレーム時間の範囲です。計測中の画面で4モードとも点群が写っていることを確認しています。
+
+| モード | 平均フレーム時間 | Directとの比 | 詳細 |
+| --- | ---: | ---: | --- |
+| Direct | 24.2〜24.3 ms | 1.00 | [仕組み](docs/point-cloud-processing-flow.md) |
+| Split（点キャッシュ、count 4） | 20.6〜20.8 ms | 0.86 | [分割描画検証](docs/split-render-validation.md#処理時間) |
+| DirectPixelPoints | 10.4〜10.5 ms | 0.43 | [集め直し方式](docs/gather-prototype.md) |
+| Gather（大きい円はQuad） | 15.2〜15.3 ms | 0.63 | [集め直し方式](docs/gather-prototype.md) |
+
+### エディタ
+
 すべてUnityエディタ上、`CameraOrbitMover` + `BenchmarkSession (capture=60fps)`、570フレーム、1920x1080での値です。
 回ごとにDirectの値も揺れるため、同じ回のDirectと比べます。
 
@@ -46,5 +59,5 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 ## 現在の制限
 
-- 計測はエディタ上の1データ・1カメラ経路だけです。
-- ビルドしたプレイヤーでは、全モードで点群が描かれません（2026-11-01に確認、原因は未調査）。そのため、ビルドでの計測値はありません。
+- 計測は1データ・1カメラ経路・1台のGPU（Intel UHD）だけです。
+- 2026-11-01より前のビルドの計測値は無効です（シェーダのタグ違いで点群が描かれていませんでした）。
