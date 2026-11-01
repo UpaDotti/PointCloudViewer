@@ -9,6 +9,7 @@ C#のコンパイル確認、エディタでの確認や計測、ビルドをす
 - エディタが裏にあると最初の `eval_file` がタイムアウトする。`--timeout 120`（秒）で再実行する
 - `eval_file` では using が効かず、URPの型も直接参照できない。完全修飾名とリフレクションで触る
 - `capture_game_view` の `save_path` はAssets基準。撮影後に `AssetDatabase.DeleteAsset` で消す
+- `capture_game_view` は1920x1080の画面でも1280x720に縮めて保存する。画素差を測るときは、Play中に `ScreenCapture.CaptureScreenshot`（絶対パス可）で原寸を撮る
 - ビルド計測は `Tools/Run-Benchmark.ps1`。途中の画面を撮って点群が写っていることを確かめる（起動後15秒以上待ってから撮る）
 - 自作シェーダのタグは `"RenderPipeline"="UniversalPipeline"` にする。違う値（例: `UniversalRenderPipeline`）だと、エディタでは描けるのに、ビルドでURPがそのシェーダの中身を全部捨てて何も描かれない。ビルドログの `After scriptable stripping: 0` が目印
 - エディタでビルドすると、URPアセットやProjectSettingsが書き換わることがある。コミット前に差分を確認する
