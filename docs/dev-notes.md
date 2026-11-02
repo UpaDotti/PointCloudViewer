@@ -7,6 +7,7 @@ C#のコンパイル確認、エディタでの確認や計測、ビルドをす
 - C#のコンパイル確認は `dotnet build Assembly-CSharp.csproj`。新規.csで「型が見つからない」と出たら、Unityがcsprojを作り直してエントリが消えている。csprojのCompileエントリを確認し、最後はUnityで Assets > Refresh
 - エディタ操作は `unity command --project-path .`（com.unity.pipeline）。`--project-path` は必ず付ける（別プロジェクトのエディタも返るため）
 - エディタが裏にあると最初の `eval_file` がタイムアウトする。`--timeout 120`（秒）で再実行する
+- シェーダなどを `AssetDatabase.Refresh` で読み直した直後は、`editor_play` が成功を返してもPlayが止まることがある。`editor_status` で再読み込みの終わりを待ってからPlayに入り、スクリプトの待ちには必ず上限を付ける
 - `eval_file` では using が効かず、URPの型も直接参照できない。完全修飾名とリフレクションで触る
 - `capture_game_view` の `save_path` はAssets基準。撮影後に `AssetDatabase.DeleteAsset` で消す
 - `capture_game_view` は1920x1080の画面でも1280x720に縮めて保存する。画素差を測るときは、Play中に `ScreenCapture.CaptureScreenshot`（絶対パス可）で原寸を撮る。ときどき保存されないので、ファイルができたか確かめて撮り直す

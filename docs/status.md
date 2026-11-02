@@ -8,7 +8,7 @@
 
 | 項目 | 材料 |
 | --- | --- |
-| Split・GatherNearDepthを採用するか | ビルドでDirect 24.2 ms、Split 20.7 ms（0.86倍）、Gather 15.2 ms（0.63倍）、GatherNearDepth 19.5 ms（0.80倍）。Gatherは手前の建物で円が半径4画素で切れて隙間が出るので、採用候補はGatherNearDepth。原寸で色の差が8より大きい画素は、初期視点でSplit 0.73%、Gather 8.50%、GatherNearDepth 4.04%（周回経路ではGatherNearDepth 8.71%で、Splitは未計測）（[対策の結果](gather-prototype.md#円切れの対策-手前の角で判定するgatherneardepthモード)） |
+| Split・GatherNearDepthを採用するか | ビルドでDirect 24.2 ms、Split 20.7 ms（0.86倍）、Gather 15.2 ms（0.63倍）、GatherNearDepth 19.5 ms（0.80倍）。Gatherは手前の建物で円が半径4画素で切れて隙間が出るので、採用候補はGatherNearDepth。原寸で色の差が8より大きい画素は、初期視点でSplit 0.73%、Gather 8.50%、GatherNearDepth 4.04%（周回経路ではGatherNearDepth 8.71%で、Splitは未計測）。GatherNearDepthの差の約92〜95%は、円の中心が最大約0.7画素ずれる丸めによるもので、誤りではなく精度の差（[原因](gather-prototype.md#細かい差の原因円の中心の丸め)）（[対策の結果](gather-prototype.md#円切れの対策-手前の角で判定するgatherneardepthモード)） |
 
 ## 次の作業
 
