@@ -18,6 +18,8 @@ public class OpcLoader : MonoBehaviour
         DirectPixelPoints,
         // 全点を1画素の点で描き、画面空間で周りの円を集め直して表示する試作モード
         Gather,
+        // Gatherの大きい円の判定を、ノードのいちばん手前の角の奥行きで行う比較用モード（円が半径で切れない）
+        GatherNearDepth,
     }
     [Header("File")]
     [SerializeField]
@@ -77,6 +79,9 @@ public class OpcLoader : MonoBehaviour
 
     // 点用マテリアル未設定の警告を出したか
     private bool _warnedMissingPixelPointMaterial;
+
+    // 集め直し方式のモードか
+    private bool IsGatherMode => _renderMode == RenderMode.Gather || _renderMode == RenderMode.GatherNearDepth;
 
     // Profiler用マーカー（Unity ProfilerのCPU Usageに"OpcLoader.～"として表示される）
     private static readonly ProfilerMarker _markerGetVisibleNodes = new ProfilerMarker("OpcLoader.GetVisibleNodes");
@@ -140,8 +145,8 @@ public class OpcLoader : MonoBehaviour
         using (_markerDrawPointCloud.Auto())
         {
             // Gatherモードでは、集め直しの半径を超える円のノードを先頭へ集める（そこだけQuadで描くため）
-            float largePixelRadius = _renderMode == RenderMode.Gather ? GatherRadiusPixels : 0f;
-            int commandCount = _renderer.Prepare(_streamer, _selections, _cameraState, MinPixelSize, MaxPixelSize, _pointSizeScale, largePixelRadius);
+            float largePixelRadius = IsGatherMode ? GatherRadiusPixels : 0f;
+            int commandCount = _renderer.Prepare(_streamer, _selections, _cameraState, MinPixelSize, MaxPixelSize, _pointSizeScale, largePixelRadius, _renderMode == RenderMode.GatherNearDepth);
             RecordBenchmarkFrame(commandCount);
 
             // 集め直し方式はGatherモードの時だけ有効にする（他のモードでは毎フレーム無効に戻す）
@@ -173,7 +178,7 @@ public class OpcLoader : MonoBehaviour
                 return;
             }
 
-            if (_renderMode == RenderMode.Gather)
+            if (IsGatherMode)
             {
                 DisableSplitRenderBridge();
                 OpcGatherRenderBridge.Active = true;
@@ -246,6 +251,7 @@ public class OpcLoader : MonoBehaviour
         Benchmarker.Record("OpcLoader.Mode.Split", _renderMode == RenderMode.Split ? 1 : 0);
         Benchmarker.Record("OpcLoader.Mode.DirectPixelPoints", _renderMode == RenderMode.DirectPixelPoints ? 1 : 0);
         Benchmarker.Record("OpcLoader.Mode.Gather", _renderMode == RenderMode.Gather ? 1 : 0);
+        Benchmarker.Record("OpcLoader.Mode.GatherNearDepth", _renderMode == RenderMode.GatherNearDepth ? 1 : 0);
         Benchmarker.Record("OpcLoader.Draw.Commands", commandCount);
         Benchmarker.Record("OpcLoader.Draw.Points", _renderer.LastPreparedPointCount);
         Benchmarker.Record("OpcLoader.Selection.Count", _selections.Count);

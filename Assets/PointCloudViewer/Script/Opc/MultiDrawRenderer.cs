@@ -118,8 +118,9 @@ public class MultiDrawRenderer : IDisposable
     /// 0より大きければ、画面半径がこの値を超えうるノードのコマンドを先頭へ集め、その数を LargeCommandCount に入れる。
     /// 0以下なら並べ替えず、LargeCommandCount は0。
     /// </param>
+    /// <param name="judgeLargeByNearestDepth">trueならノード中心ではなく、いちばん手前の角の奥行きで判定する（円が半径で切れない）。</param>
     public int Prepare(PointStreamer streamer, List<NodeSelection> selections, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale,
-        float largePixelRadius = 0f)
+        float largePixelRadius = 0f, bool judgeLargeByNearestDepth = false)
     {
         // ロード済みノードの描画コマンドとノード描画データを詰める
         int commandCount = 0;
@@ -137,7 +138,7 @@ public class MultiDrawRenderer : IDisposable
         // 円が大きいノードを先頭へ集める（集め直し方式では先頭の範囲だけQuadで描くため）
         if (largePixelRadius > 0f)
         {
-            LargeCommandCount = MoveLargeCommandsToFront(commandCount, camera, maxPixelSize, largePixelRadius);
+            LargeCommandCount = MoveLargeCommandsToFront(commandCount, camera, maxPixelSize, largePixelRadius, judgeLargeByNearestDepth);
         }
 
         // 今フレーム分のコマンドとノード描画データをGPUへ転送
@@ -165,9 +166,9 @@ public class MultiDrawRenderer : IDisposable
 
     /// <summary>
     /// ノード中心での画面半径がしきい値を超えるコマンドを、順番を保ったまま先頭へ集め、その数を返す。
-    /// 半径はシェーダと同じ式（ワールド半径 × 変換係数 ÷ 奥行き、上限maxPixelSize）で、奥行きはノード中心の値を使う。
+    /// 半径はシェーダと同じ式（ワールド半径 × 変換係数 ÷ 奥行き、上限maxPixelSize）で、奥行きはノード中心またはいちばん手前の角の値を使う。
     /// </summary>
-    private int MoveLargeCommandsToFront(int commandCount, in CameraState camera, float maxPixelSize, float largePixelRadius)
+    private int MoveLargeCommandsToFront(int commandCount, in CameraState camera, float maxPixelSize, float largePixelRadius, bool judgeByNearestDepth)
     {
         // 大きいコマンド → 小さいコマンドの順に作業配列へ写す（2回走査して順番を保つ）
         int writeIndex = 0;
@@ -176,7 +177,7 @@ public class MultiDrawRenderer : IDisposable
             bool wantLarge = pass == 0;
             for (int i = 0; i < commandCount; i++)
             {
-                if (IsLargeCommand(i, camera, maxPixelSize, largePixelRadius) != wantLarge) continue;
+                if (IsLargeCommand(i, camera, maxPixelSize, largePixelRadius, judgeByNearestDepth) != wantLarge) continue;
                 _sortedCommandArgs[writeIndex] = _commandArgs[i];
                 _sortedPointCommandArgs[writeIndex] = _pointCommandArgs[i];
                 _sortedNodeDrawData[writeIndex] = _nodeDrawData[i];
@@ -192,19 +193,36 @@ public class MultiDrawRenderer : IDisposable
         return LargeCommandCount;
     }
 
-    // コマンドのノードで、中心の奥行きでの画面半径がしきい値を超えるか
-    // （手前側の奥行きで判定すると近くのノードがほぼ全部Quadに回り、点の半数以上がQuadになったため中心で判定する）
-    private bool IsLargeCommand(int commandIndex, in CameraState camera, float maxPixelSize, float largePixelRadius)
+    // コマンドのノードで、指定の奥行きでの画面半径がしきい値を超えるか
+    // （手前側の奥行きで判定すると近くのノードがほぼ全部Quadに回り、点の半数以上がQuadになったため、Gatherモードは中心で判定する）
+    private bool IsLargeCommand(int commandIndex, in CameraState camera, float maxPixelSize, float largePixelRadius, bool judgeByNearestDepth)
     {
         NodeDrawData node = _nodeDrawData[commandIndex];
-        Vector3 center = (node.boundsMin + node.boundsMax) * 0.5f;
 
-        // ノード中心の奥行き（カメラの近く・背後は下限でクランプ）
-        float centerDepth = Vector3.Dot(center - camera.position, camera.forward);
-        if (centerDepth < camera.minDepth) centerDepth = camera.minDepth;
+        // 判定に使う奥行き（カメラの近く・背後は下限でクランプ）
+        float depth = judgeByNearestDepth ? NearestCornerDepth(node, camera) : CenterDepth(node, camera);
+        if (depth < camera.minDepth) depth = camera.minDepth;
 
-        float pixelRadius = Mathf.Min(node.worldRadius * camera.worldToPixel / centerDepth, maxPixelSize);
+        float pixelRadius = Mathf.Min(node.worldRadius * camera.worldToPixel / depth, maxPixelSize);
         return pixelRadius > largePixelRadius;
+    }
+
+    // ノード中心の奥行き
+    private static float CenterDepth(in NodeDrawData node, in CameraState camera)
+    {
+        Vector3 center = (node.boundsMin + node.boundsMax) * 0.5f;
+        return Vector3.Dot(center - camera.position, camera.forward);
+    }
+
+    // ノードのいちばん手前の角の奥行き（ノード内のどの点もこれより奥にある）
+    private static float NearestCornerDepth(in NodeDrawData node, in CameraState camera)
+    {
+        Vector3 forward = camera.forward;
+        Vector3 nearest = new Vector3(
+            forward.x >= 0f ? node.boundsMin.x : node.boundsMax.x,
+            forward.y >= 0f ? node.boundsMin.y : node.boundsMax.y,
+            forward.z >= 0f ? node.boundsMin.z : node.boundsMax.z);
+        return Vector3.Dot(nearest - camera.position, forward);
     }
 
     /// <summary>選択ノードが未ロードなら、ロード済みの親ノードを代替描画する。</summary>
