@@ -9,10 +9,11 @@ C#のコンパイル確認、エディタでの確認や計測、ビルドをす
 - エディタが裏にあると最初の `eval_file` がタイムアウトする。`--timeout 120`（秒）で再実行する
 - `eval_file` では using が効かず、URPの型も直接参照できない。完全修飾名とリフレクションで触る
 - `capture_game_view` の `save_path` はAssets基準。撮影後に `AssetDatabase.DeleteAsset` で消す
-- `capture_game_view` は1920x1080の画面でも1280x720に縮めて保存する。画素差を測るときは、Play中に `ScreenCapture.CaptureScreenshot`（絶対パス可）で原寸を撮る
-- ビルド計測は `Tools/Run-Benchmark.ps1`。途中の画面を撮って点群が写っていることを確かめる（起動後15秒以上待ってから撮る）
+- `capture_game_view` は1920x1080の画面でも1280x720に縮めて保存する。画素差を測るときは、Play中に `ScreenCapture.CaptureScreenshot`（絶対パス可）で原寸を撮る。ときどき保存されないので、ファイルができたか確かめて撮り直す
+- ビルド計測は `Tools/Run-Benchmark.ps1`。途中の画面を撮って点群が写っていることを確かめる。計測は起動から約12秒で終わるので、走っている間に撮る。窓が裏にあると画面全体の撮影には写らないので、`PrintWindow`（フラグ3）で窓の中身を撮る
 - 自作シェーダのタグは `"RenderPipeline"="UniversalPipeline"` にする。違う値（例: `UniversalRenderPipeline`）だと、エディタでは描けるのに、ビルドでURPがそのシェーダの中身を全部捨てて何も描かれない。ビルドログの `After scriptable stripping: 0` が目印
 - エディタでビルドすると、URPアセットやProjectSettingsが書き換わることがある。コミット前に差分を確認する
+- `eval_file` で `BenchmarkPlayerBuilder.Build()` を呼ぶと、5秒でタイムアウトのエラーが返るが、ビルドは裏で続く。結果は `Editor.log` の `BenchmarkPlayerBuilder:` の行で確かめる。`errors=` が1以上でも `Succeeded` なら出力はできている（2026-11-03は `errors=2`。ログにUnity Connectの通信エラーがあるが、数え方は確かめていない）
 - パスごとのGPU時間は `ProfilerRecorder` + `GpuRecorder` で取る。Render Graphのパスには自前の `ProfilingSampler` を渡す。サンプル数を必ず確認する
 - GPUのサンプルは再コンパイル直後の1回目のPlayでしか届かないことがある。`ProfilingSampler.gpuElapsedTime` と `Profiling.Recorder` は値が止まるので使わない
 - GPU描画の不具合は推測で直さず、エディタ内の診断スクリプトで実測する。出力にversionマーカーを入れ、調査後に削除する

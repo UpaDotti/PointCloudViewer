@@ -8,7 +8,7 @@
 
 | 項目 | 材料 |
 | --- | --- |
-| Split・Gatherを採用するか | ビルドでもエディタでもどちらもDirectより速い。ビルドではDirect 24.2 ms、Split 20.7 ms（約14%速い）、Gather 15.2 ms（約37%速い）（[README](../README.md#最新の計測)）。GatherはDirectと円の境目で約9%の画素が違うが、目視ではほぼ同じ |
+| Split・GatherNearDepthを採用するか | ビルドでDirect 24.2 ms、Split 20.7 ms（0.86倍）、Gather 15.2 ms（0.63倍）、GatherNearDepth 19.5 ms（0.80倍）。Gatherは手前の建物で円が半径4画素で切れて隙間が出るので、採用候補はGatherNearDepth。原寸で色の差が8より大きい画素は、初期視点でSplit 0.73%、Gather 8.50%、GatherNearDepth 4.04%（周回経路ではGatherNearDepth 8.71%で、Splitは未計測）（[対策の結果](gather-prototype.md#円切れの対策-手前の角で判定するgatherneardepthモード)） |
 
 ## 次の作業
 
@@ -18,6 +18,7 @@
 2. **点キャッシュ方式のSplitで測り直す**
    - SplitCount比較（旧方式の値しかない）。`SplitCount = 8` も測る
    - カメラ移動後と解像度変更後のスクリーンショット
+   - 周回経路上のDirectとの画素差（GatherNearDepthと比べるため。[Gatherの記録](gather-prototype.md#円切れの対策-手前の角で判定するgatherneardepthモード)と同じ撮り方）
 
 ## いつかやる
 

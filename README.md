@@ -13,6 +13,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 | Direct | 基準 | 1点を4頂点のQuadで描く | [仕組み](docs/point-cloud-processing-flow.md) |
 | Split | 検証中 | 1/Nずつ作り直す点一覧N本を、円として描く | [分割描画検証](docs/split-render-validation.md) |
 | DirectPixelPoints | 比較用 | 円を作らない（1画素点のみ。手前の面が透ける） | [集め直し方式](docs/gather-prototype.md) |
+| GatherNearDepth | 比較用 | Gatherの大きい円の判定を、ノードのいちばん手前の角の奥行きで行う。円は切れないが、Quadで描く点が増える | [集め直し方式](docs/gather-prototype.md#円切れの対策-手前の角で判定するgatherneardepthモード) |
 | Gather | 試作 | 1画素点を描いた後、画面上で周りの円を集め直す | [集め直し方式](docs/gather-prototype.md) |
 
 ## 最新の計測
@@ -27,6 +28,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 | Split（点キャッシュ、count 4） | 20.6〜20.8 ms | 0.86 | [分割描画検証](docs/split-render-validation.md#処理時間) |
 | DirectPixelPoints | 10.4〜10.5 ms | 0.43 | [集め直し方式](docs/gather-prototype.md) |
 | Gather（大きい円はQuad） | 15.2〜15.3 ms | 0.63 | [集め直し方式](docs/gather-prototype.md) |
+| GatherNearDepth（2026-11-03） | 19.4〜19.5 ms | 0.80 | [集め直し方式](docs/gather-prototype.md#円切れの対策-手前の角で判定するgatherneardepthモード) |
 
 ### エディタ
 
