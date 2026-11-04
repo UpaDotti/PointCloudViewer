@@ -8,7 +8,7 @@ LAS由来の大量点群（数百万〜1億点）をUnityで表示する検証�
 - 最新の計測値の一覧: `README.md`
 - 何が重いか（性能の前提）: `docs/profiler-frame-analysis.md`
 - 次にやること・人の判断待ち: `docs/status.md`（次の作業はここだけに書く）
-- 各方式の実装と計測: `docs/split-render-validation.md`（Split）、`docs/gather-prototype.md`（Gather）
+- 各方式の実装と計測: `docs/split-render-validation.md`（Split、採用）、`docs/gather-prototype.md`（Gather、不採用・コード削除済み）
 - 人向けの全体像: <private URL> （正本から生成する。ページを直接編集しない）
 
 ## 開発ループ（性能改善・研究）

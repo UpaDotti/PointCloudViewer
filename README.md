@@ -2,7 +2,7 @@
 
 PointCloudViewerは、LAS由来の大量点群（数百万〜1億点規模）をUnityで表示するための検証用Viewerです。
 Octreeの画面占有面積でLODを選び、見える範囲の点だけを段階的にGPUへ常駐させて、Indirect Drawで描画します。
-今は、内蔵GPUで詰まっている頂点処理を減らすための描画方式を比べています（詰まっている根拠は[フレーム時間の原因分析](docs/profiler-frame-analysis.md)）。
+内蔵GPUで詰まっている頂点処理を減らす方式を比べた結果、Split（点キャッシュ）をメインに採用し、Directを基準として残しています（詰まっている根拠は[フレーム時間の原因分析](docs/profiler-frame-analysis.md)、採用の理由は[集め直し方式](docs/gather-prototype.md#採用の判断)）。
 
 ## 描画モード
 
@@ -11,10 +11,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 | モード | 位置づけ | 円（点の見た目）の作り方 | 詳細 |
 | --- | --- | --- | --- |
 | Direct | 基準 | 1点を4頂点のQuadで描く | [仕組み](docs/point-cloud-processing-flow.md) |
-| Split | 検証中 | 1/Nずつ作り直す点一覧N本を、円として描く | [分割描画検証](docs/split-render-validation.md) |
-| DirectPixelPoints | 比較用 | 円を作らない（1画素点のみ。手前の面が透ける） | [集め直し方式](docs/gather-prototype.md) |
-| GatherNearDepth | 比較用 | Gatherの大きい円の判定を、ノードのいちばん手前の角の奥行きで行う。円は切れないが、Quadで描く点が増える | [集め直し方式](docs/gather-prototype.md#円切れの対策-手前の角で判定するgatherneardepthモード) |
-| Gather | 試作 | 1画素点を描いた後、画面上で周りの円を集め直す | [集め直し方式](docs/gather-prototype.md) |
+| Split | 採用（メイン） | 1/Nずつ作り直す点一覧N本を、円として描く | [分割描画検証](docs/split-render-validation.md) |
 
 ## 最新の計測
 
@@ -26,9 +23,9 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 | --- | ---: | ---: | --- |
 | Direct | 24.2〜24.3 ms | 1.00 | [仕組み](docs/point-cloud-processing-flow.md) |
 | Split（点キャッシュ、count 4） | 20.6〜20.8 ms | 0.86 | [分割描画検証](docs/split-render-validation.md#処理時間) |
-| DirectPixelPoints | 10.4〜10.5 ms | 0.43 | [集め直し方式](docs/gather-prototype.md) |
-| Gather（大きい円はQuad） | 15.2〜15.3 ms | 0.63 | [集め直し方式](docs/gather-prototype.md) |
-| GatherNearDepth（2026-11-03） | 19.4〜19.5 ms | 0.80 | [集め直し方式](docs/gather-prototype.md#円切れの対策-手前の角で判定するgatherneardepthモード) |
+| DirectPixelPoints（削除済み） | 10.4〜10.5 ms | 0.43 | [集め直し方式](docs/gather-prototype.md) |
+| Gather（削除済み。円が切れる） | 15.2〜15.3 ms | 0.63 | [集め直し方式](docs/gather-prototype.md) |
+| GatherNearDepth（削除済み、2026-11-03） | 19.4〜19.5 ms | 0.80 | [集め直し方式](docs/gather-prototype.md#円切れの対策-手前の角で判定するgatherneardepthモード) |
 
 ### エディタ
 
@@ -48,7 +45,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 | 次にやること・人の判断待ち | [次にやること](docs/status.md) |
 | 仕組み（処理の流れ・クラス・データの形・設計判断） | [点群の変換から描画まで](docs/point-cloud-processing-flow.md) |
 | 分割描画の実装・計測・URP / Render Graphの制約 | [分割描画検証](docs/split-render-validation.md) |
-| 集め直し方式の実装・計測 | [集め直し方式](docs/gather-prototype.md) |
+| 集め直し方式の計測と不採用の理由（コードは削除済み） | [集め直し方式](docs/gather-prototype.md) |
 | 1億点超データの出所と再現条件 | [1億点超データの出所](docs/hundred-million-point-reproduction.md) |
 | 何が重いか（フレーム時間の内訳、頂点処理で詰まっている根拠） | [フレーム時間の原因分析](docs/profiler-frame-analysis.md) |
 | AIへの作業指示 | [CLAUDE.md](CLAUDE.md) |
