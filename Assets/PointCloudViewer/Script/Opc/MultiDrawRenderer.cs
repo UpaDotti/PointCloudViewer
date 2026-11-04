@@ -14,19 +14,10 @@ public class MultiDrawRenderer : IDisposable
 
     private readonly MaterialPropertyBlock _mpb;
     private RenderParams _rp;
-    // 1画素点で描く時の描画パラメータ（点用マテリアルが未設定ならnull）
-    private RenderParams? _pointRp;
     private GraphicsBuffer _quadIndex;
     private GraphicsBuffer _commandBuffer;
-    // 1画素点用のコマンド（1点=1頂点の非Indexed形式。Quad用コマンドと同じ並び）
-    private GraphicsBuffer _pointCommandBuffer;
     private GraphicsBuffer _nodeDataBuffer;
     private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _commandArgs;
-    private readonly GraphicsBuffer.IndirectDrawArgs[] _pointCommandArgs;
-    // 円が大きいノードを先頭へ集める時の作業配列（毎フレームの割り当てを避けるため使い回す）
-    private readonly GraphicsBuffer.IndirectDrawIndexedArgs[] _sortedCommandArgs;
-    private readonly GraphicsBuffer.IndirectDrawArgs[] _sortedPointCommandArgs;
-    private readonly NodeDrawData[] _sortedNodeDrawData;
     private readonly NodeDrawData[] _nodeDrawData;
     private readonly Bounds[] _pointSizeBoundsByCommand;
     private readonly Dictionary<int, int> _commandIndexByNode = new Dictionary<int, int>();
@@ -38,7 +29,7 @@ public class MultiDrawRenderer : IDisposable
     private static readonly int _minPixelSizeId = Shader.PropertyToID("_MinPixelSize");
     private static readonly int _maxPixelSizeId = Shader.PropertyToID("_MaxPixelSize");
 
-    public MultiDrawRenderer(Material pointMaterial, Material pixelPointMaterial, OpcFile file, GpuPointPool pool)
+    public MultiDrawRenderer(Material pointMaterial, OpcFile file, GpuPointPool pool)
     {
         _file = file;
         _pool = pool;
@@ -59,14 +50,6 @@ public class MultiDrawRenderer : IDisposable
         Vector3 rootCenter = (header.rootMin + header.rootMax) * 0.5f;
         _rp.worldBounds = new Bounds(rootCenter, header.rootMax - header.rootMin);
 
-        // 1画素点用の描画パラメータ（マテリアル以外はQuad用と同じ）
-        if (pixelPointMaterial != null)
-        {
-            RenderParams pointRp = _rp;
-            pointRp.material = pixelPointMaterial;
-            _pointRp = pointRp;
-        }
-
         // 点1つを表すQuad（三角形2枚）のインデックスバッファ
         uint[] index = { 0u, 1u, 2u, 2u, 1u, 3u };
         _quadIndex = new GraphicsBuffer(GraphicsBuffer.Target.Index, index.Length, sizeof(uint));
@@ -76,12 +59,7 @@ public class MultiDrawRenderer : IDisposable
         int maxNodes = file.Nodes.Length;
         _commandBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, maxNodes, GraphicsBuffer.IndirectDrawIndexedArgs.size);
         _nodeDataBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, maxNodes, System.Runtime.InteropServices.Marshal.SizeOf<NodeDrawData>());
-        _pointCommandBuffer = new GraphicsBuffer(GraphicsBuffer.Target.IndirectArguments, maxNodes, GraphicsBuffer.IndirectDrawArgs.size);
         _commandArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[maxNodes];
-        _pointCommandArgs = new GraphicsBuffer.IndirectDrawArgs[maxNodes];
-        _sortedCommandArgs = new GraphicsBuffer.IndirectDrawIndexedArgs[maxNodes];
-        _sortedPointCommandArgs = new GraphicsBuffer.IndirectDrawArgs[maxNodes];
-        _sortedNodeDrawData = new NodeDrawData[maxNodes];
         _nodeDrawData = new NodeDrawData[maxNodes];
         _pointSizeBoundsByCommand = new Bounds[maxNodes];
     }
@@ -99,9 +77,6 @@ public class MultiDrawRenderer : IDisposable
     /// <summary>直近のPrepareで詰めた合計描画点数</summary>
     public long LastPreparedPointCount { get; private set; }
 
-    /// <summary>直近のPrepareで先頭へ集めた「円が大きいノード」のコマンド数（並べ替えなしなら0）</summary>
-    public int LargeCommandCount { get; private set; }
-
     /// <summary>ロード済みノードを1回のマルチドローでカメラへ直接描画する</summary>
     public void Draw(PointStreamer streamer, List<NodeSelection> selections, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
     {
@@ -114,18 +89,11 @@ public class MultiDrawRenderer : IDisposable
     /// 描画コマンドとノード描画データを詰めてGPUへ転送し、共通パラメータを設定する。
     /// 実際の描画は行わず、コマンド数を返す（直接描画/分割描画の両方の前段で使う）。
     /// </summary>
-    /// <param name="largePixelRadius">
-    /// 0より大きければ、画面半径がこの値を超えうるノードのコマンドを先頭へ集め、その数を LargeCommandCount に入れる。
-    /// 0以下なら並べ替えず、LargeCommandCount は0。
-    /// </param>
-    /// <param name="judgeLargeByNearestDepth">trueならノード中心ではなく、いちばん手前の角の奥行きで判定する（円が半径で切れない）。</param>
-    public int Prepare(PointStreamer streamer, List<NodeSelection> selections, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale,
-        float largePixelRadius = 0f, bool judgeLargeByNearestDepth = false)
+    public int Prepare(PointStreamer streamer, List<NodeSelection> selections, in CameraState camera, float minPixelSize, float maxPixelSize, float pointSizeScale)
     {
         // ロード済みノードの描画コマンドとノード描画データを詰める
         int commandCount = 0;
         LastPreparedPointCount = 0;
-        LargeCommandCount = 0;
         _commandIndexByNode.Clear();
         for (int i = 0; i < selections.Count; i++)
         {
@@ -135,15 +103,8 @@ public class MultiDrawRenderer : IDisposable
         // 描画対象が無ければ転送もしない
         if (commandCount == 0) return 0;
 
-        // 円が大きいノードを先頭へ集める（集め直し方式では先頭の範囲だけQuadで描くため）
-        if (largePixelRadius > 0f)
-        {
-            LargeCommandCount = MoveLargeCommandsToFront(commandCount, camera, maxPixelSize, largePixelRadius, judgeLargeByNearestDepth);
-        }
-
         // 今フレーム分のコマンドとノード描画データをGPUへ転送
         _commandBuffer.SetData(_commandArgs, 0, 0, commandCount);
-        _pointCommandBuffer.SetData(_pointCommandArgs, 0, 0, commandCount);
         _nodeDataBuffer.SetData(_nodeDrawData, 0, 0, commandCount);
 
         // 全ノード共通のパラメータを設定（ノード別パラメータは _NodeData から引く）
@@ -154,75 +115,8 @@ public class MultiDrawRenderer : IDisposable
         _mpb.SetFloat(_minPixelSizeId, minPixelSize);
         _mpb.SetFloat(_maxPixelSizeId, maxPixelSize);
         _rp.matProps = _mpb;
-        if (_pointRp.HasValue)
-        {
-            RenderParams pointRp = _pointRp.Value;
-            pointRp.matProps = _mpb;
-            _pointRp = pointRp;
-        }
 
         return commandCount;
-    }
-
-    /// <summary>
-    /// ノード中心での画面半径がしきい値を超えるコマンドを、順番を保ったまま先頭へ集め、その数を返す。
-    /// 半径はシェーダと同じ式（ワールド半径 × 変換係数 ÷ 奥行き、上限maxPixelSize）で、奥行きはノード中心またはいちばん手前の角の値を使う。
-    /// </summary>
-    private int MoveLargeCommandsToFront(int commandCount, in CameraState camera, float maxPixelSize, float largePixelRadius, bool judgeByNearestDepth)
-    {
-        // 大きいコマンド → 小さいコマンドの順に作業配列へ写す（2回走査して順番を保つ）
-        int writeIndex = 0;
-        for (int pass = 0; pass < 2; pass++)
-        {
-            bool wantLarge = pass == 0;
-            for (int i = 0; i < commandCount; i++)
-            {
-                if (IsLargeCommand(i, camera, maxPixelSize, largePixelRadius, judgeByNearestDepth) != wantLarge) continue;
-                _sortedCommandArgs[writeIndex] = _commandArgs[i];
-                _sortedPointCommandArgs[writeIndex] = _pointCommandArgs[i];
-                _sortedNodeDrawData[writeIndex] = _nodeDrawData[i];
-                writeIndex++;
-            }
-            if (wantLarge) LargeCommandCount = writeIndex;
-        }
-
-        // 作業配列を本体へ戻す
-        Array.Copy(_sortedCommandArgs, _commandArgs, commandCount);
-        Array.Copy(_sortedPointCommandArgs, _pointCommandArgs, commandCount);
-        Array.Copy(_sortedNodeDrawData, _nodeDrawData, commandCount);
-        return LargeCommandCount;
-    }
-
-    // コマンドのノードで、指定の奥行きでの画面半径がしきい値を超えるか
-    // （手前側の奥行きで判定すると近くのノードがほぼ全部Quadに回り、点の半数以上がQuadになったため、Gatherモードは中心で判定する）
-    private bool IsLargeCommand(int commandIndex, in CameraState camera, float maxPixelSize, float largePixelRadius, bool judgeByNearestDepth)
-    {
-        NodeDrawData node = _nodeDrawData[commandIndex];
-
-        // 判定に使う奥行き（カメラの近く・背後は下限でクランプ）
-        float depth = judgeByNearestDepth ? NearestCornerDepth(node, camera) : CenterDepth(node, camera);
-        if (depth < camera.minDepth) depth = camera.minDepth;
-
-        float pixelRadius = Mathf.Min(node.worldRadius * camera.worldToPixel / depth, maxPixelSize);
-        return pixelRadius > largePixelRadius;
-    }
-
-    // ノード中心の奥行き
-    private static float CenterDepth(in NodeDrawData node, in CameraState camera)
-    {
-        Vector3 center = (node.boundsMin + node.boundsMax) * 0.5f;
-        return Vector3.Dot(center - camera.position, camera.forward);
-    }
-
-    // ノードのいちばん手前の角の奥行き（ノード内のどの点もこれより奥にある）
-    private static float NearestCornerDepth(in NodeDrawData node, in CameraState camera)
-    {
-        Vector3 forward = camera.forward;
-        Vector3 nearest = new Vector3(
-            forward.x >= 0f ? node.boundsMin.x : node.boundsMax.x,
-            forward.y >= 0f ? node.boundsMin.y : node.boundsMax.y,
-            forward.z >= 0f ? node.boundsMin.z : node.boundsMax.z);
-        return Vector3.Dot(nearest - camera.position, forward);
     }
 
     /// <summary>選択ノードが未ロードなら、ロード済みの親ノードを代替描画する。</summary>
@@ -261,40 +155,15 @@ public class MultiDrawRenderer : IDisposable
     /// <summary>Prepareで詰めたコマンドを1回のマルチドローでカメラへ直接描画する</summary>
     public void DrawDirect(int commandCount)
     {
-        DrawDirectRange(0, commandCount);
-    }
-
-    /// <summary>Prepareで詰めたコマンドのうち、startCommandからcommandCount個だけQuadで描画する</summary>
-    public void DrawDirectRange(int startCommand, int commandCount)
-    {
         if (commandCount <= 0) return;
-        // 指定範囲のノードを1回のマルチドローで描画
+        // 全ノードを1回のマルチドローで描画
         Graphics.RenderPrimitivesIndexedIndirect(
             _rp,
             MeshTopology.Triangles,
             _quadIndex,
             _commandBuffer,
-            commandCount,
-            startCommand
+            commandCount
         );
-    }
-
-    /// <summary>
-    /// Prepareで詰めたコマンドを、全点1画素の点（1点=1頂点）として1回のマルチドローで描画する。
-    /// 点用マテリアルが未設定なら何もせずfalseを返す。
-    /// </summary>
-    public bool DrawDirectPixelPoints(int commandCount)
-    {
-        if (!_pointRp.HasValue) return false;
-
-        Graphics.RenderPrimitivesIndirect(
-            _pointRp.Value,
-            MeshTopology.Points,
-            _pointCommandBuffer,
-            commandCount,
-            0
-        );
-        return true;
     }
 
     // 1ノード分の描画コマンドとノード描画データを配列に積み、積んだ後のコマンド数を返す
@@ -316,15 +185,6 @@ public class MultiDrawRenderer : IDisposable
             instanceCount = instanceCount,
             startIndex = 0u,
             baseVertexIndex = 0u,
-            startInstance = 0u,
-        };
-
-        // 1画素点用の同じノードのコマンド（頂点番号=点番号）
-        _pointCommandArgs[commandCount] = new GraphicsBuffer.IndirectDrawArgs
-        {
-            vertexCountPerInstance = instanceCount,
-            instanceCount = 1u,
-            startVertex = 0u,
             startInstance = 0u,
         };
 
@@ -362,9 +222,6 @@ public class MultiDrawRenderer : IDisposable
 
         _commandBuffer?.Dispose();
         _commandBuffer = null;
-
-        _pointCommandBuffer?.Dispose();
-        _pointCommandBuffer = null;
 
         _nodeDataBuffer?.Dispose();
         _nodeDataBuffer = null;

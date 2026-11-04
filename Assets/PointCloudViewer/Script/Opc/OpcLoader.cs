@@ -14,12 +14,6 @@ public class OpcLoader : MonoBehaviour
     {
         Direct,
         Split,
-        // 全点を1画素の点（1点=1頂点）で直接描画する比較用モード
-        DirectPixelPoints,
-        // 全点を1画素の点で描き、画面空間で周りの円を集め直して表示する試作モード
-        Gather,
-        // Gatherの大きい円の判定を、ノードのいちばん手前の角の奥行きで行う比較用モード（円が半径で切れない）
-        GatherNearDepth,
     }
     [Header("File")]
     [SerializeField]
@@ -28,10 +22,6 @@ public class OpcLoader : MonoBehaviour
     [Header("Rendering")]
     [SerializeField]
     private Material _pointMaterial;
-
-    // DirectPixelPointsモード用のマテリアル（Custom/PointCloud_Point）
-    [SerializeField]
-    private Material _pixelPointMaterial;
 
     [SerializeField]
     private RenderMode _renderMode = RenderMode.Split;
@@ -54,8 +44,6 @@ public class OpcLoader : MonoBehaviour
     private const int PoolCapacityBudgetMultiplier = 4;
     private const float MinPixelSize = 0.1f;
     private const float MaxPixelSize = 8.0f;
-    // 集め直しで扱える円の半径（ピクセル）。PointCloudGatherResolve.compute / PointCloud_GatherResolve.shader のGATHER_RADIUSと一致させる
-    private const float GatherRadiusPixels = 4.0f;
     private const float MaxPointsPerPixel = 1.0f;
     private const int MaxLoadsPerFrame = 10;
     private const int UnloadDelayFrames = 30;
@@ -76,12 +64,6 @@ public class OpcLoader : MonoBehaviour
     private GpuPointPool _pointPool;
     private PointStreamer _streamer;
     private MultiDrawRenderer _renderer;
-
-    // 点用マテリアル未設定の警告を出したか
-    private bool _warnedMissingPixelPointMaterial;
-
-    // 集め直し方式のモードか
-    private bool IsGatherMode => _renderMode == RenderMode.Gather || _renderMode == RenderMode.GatherNearDepth;
 
     // Profiler用マーカー（Unity ProfilerのCPU Usageに"OpcLoader.～"として表示される）
     private static readonly ProfilerMarker _markerGetVisibleNodes = new ProfilerMarker("OpcLoader.GetVisibleNodes");
@@ -126,7 +108,7 @@ public class OpcLoader : MonoBehaviour
                 fallbackQuality = _fallbackQuality,
             }
         );
-        _renderer = new MultiDrawRenderer(_pointMaterial, _pixelPointMaterial, _file, _pointPool);
+        _renderer = new MultiDrawRenderer(_pointMaterial, _file, _pointPool);
     }
 
     private void Update()
@@ -144,13 +126,8 @@ public class OpcLoader : MonoBehaviour
 
         using (_markerDrawPointCloud.Auto())
         {
-            // Gatherモードでは、集め直しの半径を超える円のノードを先頭へ集める（そこだけQuadで描くため）
-            float largePixelRadius = IsGatherMode ? GatherRadiusPixels : 0f;
-            int commandCount = _renderer.Prepare(_streamer, _selections, _cameraState, MinPixelSize, MaxPixelSize, _pointSizeScale, largePixelRadius, _renderMode == RenderMode.GatherNearDepth);
+            int commandCount = _renderer.Prepare(_streamer, _selections, _cameraState, MinPixelSize, MaxPixelSize, _pointSizeScale);
             RecordBenchmarkFrame(commandCount);
-
-            // 集め直し方式はGatherモードの時だけ有効にする（他のモードでは毎フレーム無効に戻す）
-            DisableGatherRenderBridge();
 
             if (commandCount == 0)
             {
@@ -163,35 +140,6 @@ public class OpcLoader : MonoBehaviour
                 DisableSplitRenderBridge();
                 _renderer.DrawDirect(commandCount);
                 Benchmarker.Record("OpcLoader.Direct.DrawCalls", 1);
-                return;
-            }
-
-            if (_renderMode == RenderMode.DirectPixelPoints)
-            {
-                DisableSplitRenderBridge();
-                // 点用マテリアルが未設定なら描けないので知らせる（毎フレーム出さないよう1回だけ）
-                if (!_renderer.DrawDirectPixelPoints(commandCount) && !_warnedMissingPixelPointMaterial)
-                {
-                    Debug.LogWarning("OpcLoader: DirectPixelPointsモードですが、_pixelPointMaterialが未設定のため描画しません。");
-                    _warnedMissingPixelPointMaterial = true;
-                }
-                return;
-            }
-
-            if (IsGatherMode)
-            {
-                DisableSplitRenderBridge();
-                OpcGatherRenderBridge.Active = true;
-                OpcGatherRenderBridge.Renderer = _renderer;
-                OpcGatherRenderBridge.CommandCount = commandCount;
-                OpcGatherRenderBridge.LargeCommandCount = _renderer.LargeCommandCount;
-
-                // 集め直しの半径を超える円のノードは、今まで通りQuadで描く
-                _renderer.DrawDirectRange(0, _renderer.LargeCommandCount);
-                Benchmarker.Record("OpcLoader.Gather.LargeCommands", _renderer.LargeCommandCount);
-                long largePoints = 0;
-                for (int i = 0; i < _renderer.LargeCommandCount; i++) largePoints += _renderer.GetInstanceCount(i);
-                Benchmarker.Record("OpcLoader.Gather.LargePoints", largePoints);
                 return;
             }
 
@@ -249,20 +197,9 @@ public class OpcLoader : MonoBehaviour
     {
         Benchmarker.Record("OpcLoader.Mode.Direct", _renderMode == RenderMode.Direct ? 1 : 0);
         Benchmarker.Record("OpcLoader.Mode.Split", _renderMode == RenderMode.Split ? 1 : 0);
-        Benchmarker.Record("OpcLoader.Mode.DirectPixelPoints", _renderMode == RenderMode.DirectPixelPoints ? 1 : 0);
-        Benchmarker.Record("OpcLoader.Mode.Gather", _renderMode == RenderMode.Gather ? 1 : 0);
-        Benchmarker.Record("OpcLoader.Mode.GatherNearDepth", _renderMode == RenderMode.GatherNearDepth ? 1 : 0);
         Benchmarker.Record("OpcLoader.Draw.Commands", commandCount);
         Benchmarker.Record("OpcLoader.Draw.Points", _renderer.LastPreparedPointCount);
         Benchmarker.Record("OpcLoader.Selection.Count", _selections.Count);
-    }
-
-    private static void DisableGatherRenderBridge()
-    {
-        OpcGatherRenderBridge.Active = false;
-        OpcGatherRenderBridge.Renderer = null;
-        OpcGatherRenderBridge.CommandCount = 0;
-        OpcGatherRenderBridge.LargeCommandCount = 0;
     }
 
     private static void DisableSplitRenderBridge()
@@ -289,7 +226,6 @@ public class OpcLoader : MonoBehaviour
     {
         // 破棄するレンダラーをRendererFeature側が参照しないようにする
         DisableSplitRenderBridge();
-        DisableGatherRenderBridge();
 
         // ストリーマを先に止める（停止後に新しい結果が出ないようにする）
         _streamer?.Dispose();
