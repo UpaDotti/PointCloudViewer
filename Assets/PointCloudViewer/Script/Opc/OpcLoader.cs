@@ -162,7 +162,7 @@ public class OpcLoader : MonoBehaviour
         return (int)capacity;
     }
 
-    // "-renderMode Direct|Split|Compute" と "-opcPath 絶対パス" があればInspectorの設定を上書きする
+    // "-renderMode Direct|Split" と "-opcPath 絶対パス" があればInspectorの設定を上書きする
     private void ApplyCommandLineOverrides()
     {
         if (BenchmarkCommandLine.TryGetValue("-renderMode", out string renderModeText))

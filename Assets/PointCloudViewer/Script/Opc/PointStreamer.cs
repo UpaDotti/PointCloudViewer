@@ -273,7 +273,7 @@ public class PointStreamer : IDisposable
         _pendingLoads.Add(new PendingLoad { nodeIndex = nodeIndex, areaPx = areaPx });
     }
 
-    // 描画必要数に対してロード済み点数が不足しているか（全点ロード済みなら常にfalse）
+    // 起動直後にルートノードを先読みする（子が届くまでの代わりの表示に使う）
     private void PreloadRootFallback()
     {
         int rootIndex = _file.RootIndex;
@@ -300,6 +300,7 @@ public class PointStreamer : IDisposable
         return Math.Min(clamped, nodePointCount);
     }
 
+    // 描画必要数に対してロード済み点数が不足しているか（全点ロード済みなら常にfalse）
     private static bool NeedsMorePoints(in NodeResidency res, uint nodePointCount)
     {
         if (res.loadedCount >= (int)nodePointCount) return false;
