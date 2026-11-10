@@ -31,7 +31,7 @@
 
 後の回（SSAOの計測、[フレーム時間の原因分析](profiler-frame-analysis.md#点群以外の固定費)）では、Gather（大きい円はQuad）が16.24 / 16.24 ms、同じ回のDirectが25.53 msでした。上の表の18.7 / 17.9 msより約2ms速く、理由は確認していません。
 
-ビルドでの計測（2026-11-02、Windowsプレイヤー・通常ビルド・D3D11・Intel UHD、`Tools/Run-Benchmark.ps1`、1920x1080の窓、コミット 310e1b7）: Direct → Split → DirectPixelPoints → Gather の順に4回測りました。
+ビルドでの計測（2026-11-02、Windowsプレイヤー・通常ビルド・D3D11・Intel UHD、`Tools/Run-Benchmark.ps1`、1920x1080の窓、コミット b31c897）: Direct → Split → DirectPixelPoints → Gather の順に4回測りました。
 
 | モード | 平均フレーム時間 | p95 |
 | --- | ---: | ---: |
