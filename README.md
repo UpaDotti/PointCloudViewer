@@ -45,10 +45,20 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 | 何が重いか（フレーム時間の内訳、頂点処理で詰まっている根拠） | [フレーム時間の原因分析](docs/profiler-frame-analysis.md) |
 | AIへの作業指示 | [CLAUDE.md](CLAUDE.md) |
 
+## 点群データの用意
+
+点群データはリポジトリに含まれていません。LASから自分でOPCを作ります。
+
+1. LASを用意します。計測に使ったのは[東京都の区部点群データ](https://www.geospatial.jp/ckan/dataset/tokyopc-23ku-2024)（CC BY 4.0）です。全体はとても大きいので、まずは数図郭分で試すのがおすすめです。
+2. [PointCloudConverter](https://github.com/UpaDotti/PointCloudConverter) で、LASのフォルダを1つのOPCに変換します。出力は `sample.opc` です（手順はConverterのREADME）。
+3. `sample.opc` を `Assets/` の直下に置きます。`*.opc` は `.gitignore` に入っているのでコミットされません。
+
+別の場所に置くときは、`OpcLoader` の File Path に絶対パスを書きます。ビルドでは起動引数 `-opcPath <パス>` でも指定できます。
+
 ## 動かし方
 
 - Unity 6000.3.9f1、URP 17.3.0（Render Graph有効）。
-- `Assets/Scenes/TcpViewer.unity` を開いてPlayします。点群ファイルは `OpcLoader` の File Path（既定は `Assets/sample.opc`）です。
+- `Assets/Scenes/TcpViewer.unity` を開いてPlayします。点群ファイルは `OpcLoader` の File Path（既定は `Assets/sample.opc`）です。ファイルが無いときはConsoleにエラーが出て、何も描かれません。
 - エディタで計測するときは、シーンの `Benchmark` オブジェクトを有効にしてPlayします。終わるとConsoleに `=== BenchmarkSession` から始まる結果が出ます。
 
 ## 現在の制限
