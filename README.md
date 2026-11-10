@@ -17,15 +17,12 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 ### ビルド
 
-2026-11-02、Windowsプレイヤー（通常ビルド、D3D11、Intel UHD）、`Tools/Run-Benchmark.ps1`（`CameraOrbitMover` + `BenchmarkSession (capture=60fps)`、570フレーム、1920x1080の窓）、`Assets/sample.opc`、コミット b31c897。4モードを順に4回測った平均フレーム時間の範囲です。計測中の画面で4モードとも点群が写っていることを確認しています。
+2026-11-02、Windowsプレイヤー（通常ビルド、D3D11、Intel UHD）、`Tools/Run-Benchmark.ps1`（`CameraOrbitMover` + `BenchmarkSession (capture=60fps)`、570フレーム、1920x1080の窓）、`Assets/sample.opc`、コミット b31c897。当時あった4モードを順に4回測った平均フレーム時間の範囲です。計測中の画面で4モードとも点群が写っていることを確認しています。ここには今あるモードだけを載せます。削除済みモードの値は[集め直し方式](docs/gather-prototype.md)にあります。
 
 | モード | 平均フレーム時間 | Directとの比 | 詳細 |
 | --- | ---: | ---: | --- |
 | Direct | 24.2〜24.3 ms | 1.00 | [仕組み](docs/point-cloud-processing-flow.md) |
 | Split（点キャッシュ、count 4） | 20.6〜20.8 ms | 0.86 | [分割描画検証](docs/split-render-validation.md#処理時間) |
-| DirectPixelPoints（削除済み） | 10.4〜10.5 ms | 0.43 | [集め直し方式](docs/gather-prototype.md) |
-| Gather（削除済み。円が切れる） | 15.2〜15.3 ms | 0.63 | [集め直し方式](docs/gather-prototype.md) |
-| GatherNearDepth（削除済み、2026-11-03） | 19.4〜19.5 ms | 0.80 | [集め直し方式](docs/gather-prototype.md#円切れの対策-手前の角で判定するgatherneardepthモード) |
 
 ### エディタ
 
@@ -34,8 +31,6 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 | 計測日 | モード | 平均フレーム時間 | 同じ回のDirect | 詳細 |
 | --- | --- | ---: | ---: | --- |
-| 2026-11-01 | Gather（大きい円はQuad） | 18.7 / 17.9 ms | 24.6 / 26.7 ms | [集め直し方式](docs/gather-prototype.md) |
-| 2026-10-25 | DirectPixelPoints | 11.6 / 11.5 ms | 25.1 / 25.2 ms | [フレーム時間の原因分析](docs/profiler-frame-analysis.md#1画素の点で頂点を減らした場合) |
 | 2026-10-24 | Split（点キャッシュ、count 4） | 23.0 / 22.9 ms | 25.8 / 25.7 ms | [分割描画検証](docs/split-render-validation.md#処理時間) |
 
 ## 文書
