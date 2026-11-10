@@ -1,17 +1,13 @@
 # 点群の変換から描画まで
 
-この文書は、LASをViewer向け形式へ変換し、UnityでLOD選択・ストリーミング・GPU転送・描画するまでのデータ遷移を1ページで示す。現在の主経路はOPCであり、TPCは比較用に残る旧グリッド経路である。TPCを経由してOPCへ変換するわけではない。
+この文書は、LASをViewer向け形式へ変換し、UnityでLOD選択・ストリーミング・GPU転送・描画するまでのデータ遷移を1ページで示す。Viewerが読む形式はOPCだけである。
 
 ## 全体フロー
 
 ```text
 LAS（実座標 + 16-bit RGB）
 │
-├─ 旧TPC経路: convert_tpc.py
-│  └─ 空間グリッド + チャンク別の段階LOD → TPC（量子化座標 + RGBA）
-│     └─ TpcLoader → チャンクごとのGraphicsBuffer → Indirect Draw
-│
-└─ 現在のOPC経路: convert_opc.py
+└─ OPC経路: convert_opc.py
    ├─ 中心寄せ・Unity座標化（Y/Z交換）
    ├─ Octree分割（最大深さ8、葉は原則20万点以下）
    ├─ 葉に実点、枝に子から間引いた代表点（最大3万点）を配置
@@ -78,6 +74,7 @@ LAS（実座標 + 16-bit RGB）
 - Directは全ノードを1回のマルチドローで描く。Splitは点を`SplitCount`本の点一覧へ分散して1フレームの整列量を減らし、1画素1点に間引いて表示する点の数も減らす。一方、点一覧の本数に比例して表示Draw callと保持バッファが増え、間引きのため静止時でもDirectと一部の画素が異なる（初期視点・1920x1080で、色の差が8より大きい画素は0.73%。[分割描画検証](split-render-validation.md#静止時の画素差)）。
 - SplitはURP Render Graphのパスとして、不透明と空の描画後・半透明の前（`BeforeRenderingTransparents`）にカメラの色と深度へ書き込む。Directは `OpcLoader.Update` から直接描画する。
 - DirectPixelPoints・Gather・GatherNearDepthは比較のうえ不採用とし、2026-11-04に削除した。理由と測定値は `docs/gather-prototype.md` に残す。
+- 旧TPC経路（空間グリッド + チャンク別LOD、`TpcLoader`）は使われていなかったため、2026-11-11に削除した。削除前の実装はコミット b20c5ec で確認できる。
 
 ## 設計判断（LOD / Culling / Streaming）
 
@@ -93,12 +90,11 @@ LAS（実座標 + 16-bit RGB）
 
 ## 未確認・説明対象外
 
-- 変換スクリプトとViewerを連続実行したE2E再現、OPC/TPCファイル仕様の独立した互換性試験、破損ファイル試験は未確認。
+- 変換スクリプトとViewerを連続実行したE2E再現、OPCファイル仕様の独立した互換性試験、破損ファイル試験は未確認。
 - `max_depth=8`、葉20万点、枝3万点、OPC 9 byte/点は現行既定値であり、別設定・別データセットでの品質と性能は未確認。
-- TPCは旧経路の位置づけとデータ遷移のみを示す。現在のDirect/Split比較、共有GPUプール、Octree代表点fallbackはOPC経路が対象。
 - シェーダ内部の色変換、アンチエイリアス品質、GPU各パスの専用時間、1億点表示の再現条件はこの文書の対象外。分割描画の確認済み条件と測定値は `docs/split-render-validation.md` を参照する。
 
 ## 実装根拠
 
-- Converter: `PointCloudConverter/OctreePointCloud/convert_opc.py`、`points_writer.py`、`octree.py`、`branch_lods.py`、`opc_writer.py`、`TilePointCloud/convert_tpc.py`
-- Viewer: 上記5クラスに加え、`Assets/PointCloudViewer/Script/Opc/OpcFile.cs`、`OpcPointLoadWorker.cs`、`GpuPointPool.cs`、`Assets/PointCloudViewer/Script/TpcLoader.cs`
+- Converter: `PointCloudConverter/OctreePointCloud/convert_opc.py`、`points_writer.py`、`octree.py`、`branch_lods.py`、`opc_writer.py`
+- Viewer: 上記5クラスに加え、`Assets/PointCloudViewer/Script/Opc/OpcFile.cs`、`OpcPointLoadWorker.cs`、`GpuPointPool.cs`
