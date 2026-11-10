@@ -14,7 +14,7 @@
 
 [UpaDotti/PointCloudConverter](https://github.com/UpaDotti/PointCloudConverter)
 
-確認に使用したcommit: `13fe28ee50453125fffd1f25ec983b2b929b69a5`
+確認に使用したcommit: `cbf7cfe5b76e07ff4ca0851a397e230a86e428d9`（2026-11-11の履歴書き換えで旧 `13fe28ee` から変わった。コードの処理は同じ）
 
 このConverterで東京都公開LASをOPCへ変換した。
 
