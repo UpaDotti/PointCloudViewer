@@ -1,6 +1,6 @@
 # 集め直し方式（Gather、不採用）
 
-この方式は不採用とし、2026-11-04にコードを削除しました（DirectPixelPoints、Gather、GatherNearDepth）。この文書は判断の記録として残します。削除前の実装はコミット `5d9d99f` で確認できます。
+この方式は不採用とし、2026-11-04にコードを削除しました（DirectPixelPoints、Gather、GatherNearDepth）。この文書は判断の記録として残します。削除前の実装はコミット `4d9c012` で確認できます。
 
 記録日: 2026-11-01
 
@@ -31,7 +31,7 @@
 
 後の回（SSAOの計測、[フレーム時間の原因分析](profiler-frame-analysis.md#点群以外の固定費)）では、Gather（大きい円はQuad）が16.24 / 16.24 ms、同じ回のDirectが25.53 msでした。上の表の18.7 / 17.9 msより約2ms速く、理由は確認していません。
 
-ビルドでの計測（2026-11-02、Windowsプレイヤー・通常ビルド・D3D11・Intel UHD、`Tools/Run-Benchmark.ps1`、1920x1080の窓、コミット b31c897）: Direct → Split → DirectPixelPoints → Gather の順に4回測りました。
+ビルドでの計測（2026-11-02、Windowsプレイヤー・通常ビルド・D3D11・Intel UHD、`Tools/Run-Benchmark.ps1`、1920x1080の窓、コミット 35d5c52）: Direct → Split → DirectPixelPoints → Gather の順に4回測りました。
 
 | モード | 平均フレーム時間 | p95 |
 | --- | ---: | ---: |
@@ -47,7 +47,7 @@
 
 ### 静止時の画素差（原寸）
 
-記録日: 2026-11-02、コミット c82ecca
+記録日: 2026-11-02、コミット 95b7f31
 
 条件: Splitの[静止時の画素差](split-render-validation.md#静止時の画素差)と同じです。Unityエディタ、Play中、Intel UHD・D3D11、ゲーム画面1920x1080、`sample.opc`、`ScreenCapture.CaptureScreenshot` で原寸撮影、SSAOあり。画素ごとにRGBの差の最大値を見ています。視点の移動は、初期視点から右下の建物（画面の (1450, 950)）へ向かう方向です。
 
@@ -97,7 +97,7 @@
 - 見た目: 初期視点と80単位移動の視点で、円の切れ・隙間・ノード境の大きさの段差が見えないこと
 - 速度: Split（ビルド20.7 ms）より速いこと。遅ければ、Splitに対する利点が無いので別の案を考える
 
-結果（未コミットの作業中のコード、コミット c82ecca に変更を加えた状態）:
+結果（未コミットの作業中のコード、コミット 95b7f31 に変更を加えた状態）:
 
 見た目（条件は[静止時の画素差（原寸）](#静止時の画素差原寸)と同じ）:
 
@@ -122,7 +122,7 @@
 
 - GatherNearDepthはGatherより約4.3ms遅く、Splitより約2.3ms速いです。Gatherの速さの多くは、切れを許していた分でした。
 
-ビルドでの速度（2026-11-03、Windowsプレイヤー・通常ビルド・D3D11・Intel UHD、`Tools/Run-Benchmark.ps1`、1920x1080の窓、コミット c82ecca に未コミットの変更を加えた状態）: Direct → Split → Gather → GatherNearDepth の順に3周測りました。
+ビルドでの速度（2026-11-03、Windowsプレイヤー・通常ビルド・D3D11・Intel UHD、`Tools/Run-Benchmark.ps1`、1920x1080の窓、コミット 95b7f31 に未コミットの変更を加えた状態）: Direct → Split → Gather → GatherNearDepth の順に3周測りました。
 
 | モード | 平均フレーム時間 | p95 | Directとの比 |
 | --- | ---: | ---: | ---: |
@@ -148,7 +148,7 @@
 
 ## 細かい差の原因（円の中心の丸め）
 
-記録日: 2026-11-03、コミット d66ac67 に一時的なシェーダ変更を加えて測定（変更はコミットしていません）
+記録日: 2026-11-03、コミット c2f0bbe に一時的なシェーダ変更を加えて測定（変更はコミットしていません）
 
 仮説: GatherNearDepthに残るDirectとの差の大部分は、Gatherが円の中心を画素の中心へ丸めることから来る。Directの円も同じ規則で丸めれば、差 > 8 は0.5%未満になる。
 
@@ -176,7 +176,7 @@
 - 建物の目の前: 円の切れ・隙間は出ない。Quadで描く点が増え、速さはDirectに近づく。基準は、Directに無い隙間や段差が見えないこと
 - メッシュとの前後関係: 不透明・半透明のメッシュと点群の前後はDirectと同じになる。基準は、メッシュが影響する画素の範囲がDirectと1〜2画素の差に収まり、前後が逆になる場所が無いこと
 
-結果（エディタ、Intel UHD・D3D11、1920x1080、`sample.opc`、コミット 5d9d99f）:
+結果（エディタ、Intel UHD・D3D11、1920x1080、`sample.opc`、コミット 4d9c012）:
 
 近い経路の速度: `CameraOrbitMover` の設定をPlay前に一時的に変えて（中心 (80, -70, 150)、直径100、高さ30。シーンは保存していません）、`BenchmarkSession (capture=60fps)` の570フレームを Direct → Split → GatherNearDepth → GatherNearDepth → Split → Direct の順に測りました。
 

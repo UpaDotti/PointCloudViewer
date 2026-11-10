@@ -74,7 +74,7 @@ LAS（実座標 + 16-bit RGB）
 - Directは全ノードを1回のマルチドローで描く。Splitは点を`SplitCount`本の点一覧へ分散して1フレームの整列量を減らし、1画素1点に間引いて表示する点の数も減らす。一方、点一覧の本数に比例して表示Draw callと保持バッファが増え、間引きのため静止時でもDirectと一部の画素が異なる（初期視点・1920x1080で、色の差が8より大きい画素は0.73%。[分割描画検証](split-render-validation.md#静止時の画素差)）。
 - SplitはURP Render Graphのパスとして、不透明と空の描画後・半透明の前（`BeforeRenderingTransparents`）にカメラの色と深度へ書き込む。Directは `OpcLoader.Update` から直接描画する。
 - DirectPixelPoints・Gather・GatherNearDepthは比較のうえ不採用とし、2026-11-04に削除した。理由と測定値は `docs/gather-prototype.md` に残す。
-- 旧TPC経路（空間グリッド + チャンク別LOD、`TpcLoader`）は使われていなかったため、2026-11-11に削除した。削除前の実装はコミット b20c5ec で確認できる。
+- 旧TPC経路（空間グリッド + チャンク別LOD、`TpcLoader`）は使われていなかったため、2026-11-11に削除した。削除前の実装はコミット 50a9a7d で確認できる。
 
 ## 設計判断（LOD / Culling / Streaming）
 

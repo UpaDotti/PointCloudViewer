@@ -17,7 +17,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 ### ビルド
 
-2026-11-02、Windowsプレイヤー（通常ビルド、D3D11、Intel UHD）、`Tools/Run-Benchmark.ps1`（`CameraOrbitMover` + `BenchmarkSession (capture=60fps)`、570フレーム、1920x1080の窓）、`Assets/sample.opc`、コミット b31c897。当時あった4モードを順に4回測った平均フレーム時間の範囲です。計測中の画面で4モードとも点群が写っていることを確認しています。ここには今あるモードだけを載せます。削除済みモードの値は[集め直し方式](docs/gather-prototype.md)にあります。
+2026-11-02、Windowsプレイヤー（通常ビルド、D3D11、Intel UHD）、`Tools/Run-Benchmark.ps1`（`CameraOrbitMover` + `BenchmarkSession (capture=60fps)`、570フレーム、1920x1080の窓）、`Assets/sample.opc`、コミット 35d5c52。当時あった4モードを順に4回測った平均フレーム時間の範囲です。計測中の画面で4モードとも点群が写っていることを確認しています。ここには今あるモードだけを載せます。削除済みモードの値は[集め直し方式](docs/gather-prototype.md)にあります。
 
 | モード | 平均フレーム時間 | Directとの比 | 詳細 |
 | --- | ---: | ---: | --- |
