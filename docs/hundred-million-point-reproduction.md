@@ -2,7 +2,7 @@
 
 計測に使った点群データの出所、ライセンス、作り方を記録する。データ本体はリポジトリに含めない。
 
-この成果物でいう「1億点超表示」は、1億点を超える点群を格納したOPCをViewerで開き、LODとStreamingによって選択した数百万点を描画できることを指す。全点の同時描画ではない。
+この成果物が扱う規模は、数十億点（山手線内データは約43億点、23区データは約70億点）を格納したOPCをViewerで開き、LODとStreamingによって選択した数百万点を1フレームに描画することを指す。全点の同時描画ではない。
 
 ## 元データとライセンス
 
@@ -70,7 +70,7 @@ LASフォルダを [PointCloudConverter](https://github.com/UpaDotti/PointCloudC
 - 範囲: 東西8.4km × 南北14.1km × 高さ429m
 - SHA-256: `6A82DB8764E4CAC3F69ED71814AB227041A023E9BFCBAFB8AEFF05E15000D469`
 
-計測結果は [README](../README.md) と [分割描画検証](split-render-validation.md#処理時間) にある。
+計測結果は [README](../README.md#計測データ) と [分割描画検証](split-render-validation.md#処理時間) にある。
 
 ## 23区データ（2026-07〜11、Intel UHDの計測）
 

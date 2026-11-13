@@ -81,7 +81,7 @@ LAS（実座標 + 16-bit RGB）
 | 判断 | 採用理由 | 代替案と不採用理由 | 実装根拠 |
 | --- | --- | --- | --- |
 | Octreeの画面占有面積でLODを選ぶ | カメラ距離だけでなく、投影サイズに応じて細部を増減でき、同じPoint Budgetで視認性を優先できる | 固定深度は視点や画角で点密度が変わり、遠景に過剰な点を割り当てる | `NodeLodSelector` |
-| Frustum外ノードを選択対象から除外 | GPU転送・描画コマンドの対象を可視範囲に限定し、1億点級でも常駐量を抑える | 全ノード走査・描画はメモリと帯域を先に消費する | `NodeLodSelector`、`CameraState` |
+| Frustum外ノードを選択対象から除外 | GPU転送・描画コマンドの対象を可視範囲に限定し、数十億点のOPCでも常駐量を抑える | 全ノード走査・描画はメモリと帯域を先に消費する | `NodeLodSelector`、`CameraState` |
 | 親代表点をfallbackとして常駐 | 子LODの非同期読込中も穴を作らず、カメラ移動時の見た目を連続させる | 同期ロードは表示を止める。fallbackなしはロード待ちの欠落を生む | `PointStreamer`、`MultiDrawRenderer` |
 | 共有GPUプール + 遅延アンロード | ノードごとのBuffer乱立を避け、ロード済み点を再利用できる | ノードごとの専用Bufferは管理・割当が増え、視点移動で断片化しやすい | `GpuPointPool`、`PointPoolAllocator` |
 | Direct / Splitを残す | Splitは遠くでも近くでもDirectより速く（約10%）、点ごとに位置を持つのでずれが無いためメインにする。Directは正解の基準として残す | Directだけでは頂点処理が重い。Splitだけでは正しさを比べる基準が無くなる。Gather系は速いが、円が切れるか、近い視点で利点が消える | `MultiDrawRenderer`、`OpcSplitRenderFeature` |
@@ -92,7 +92,7 @@ LAS（実座標 + 16-bit RGB）
 
 - 変換スクリプトとViewerを連続実行したE2E再現、OPCファイル仕様の独立した互換性試験、破損ファイル試験は未確認。
 - `max_depth=8`、葉20万点、枝3万点、OPC 9 byte/点は現行既定値であり、別設定・別データセットでの品質と性能は未確認。
-- シェーダ内部の色変換、アンチエイリアス品質、GPU各パスの専用時間、1億点表示の再現条件はこの文書の対象外。分割描画の確認済み条件と測定値は `docs/split-render-validation.md` を参照する。
+- シェーダ内部の色変換、アンチエイリアス品質、GPU各パスの専用時間、計測データの作り方（`docs/hundred-million-point-reproduction.md`）はこの文書の対象外。分割描画の確認済み条件と測定値は `docs/split-render-validation.md` を参照する。
 
 ## 実装根拠
 

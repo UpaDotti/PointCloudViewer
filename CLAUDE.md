@@ -1,6 +1,6 @@
 # PointCloudViewer
 
-LAS由来の大量点群（数百万〜1億点）をUnityで表示する検証用Viewer。Unity 6000.3.9f1 / URP 17.3.0（Render Graph有効）。
+LAS由来の数十億点規模の点群（計測データは約43億点、1フレームに描くのは数百万点）をUnityで表示する検証用Viewer。Unity 6000.3.9f1 / URP 17.3.0（Render Graph有効）。
 
 ## まず読むもの
 

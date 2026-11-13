@@ -11,6 +11,7 @@ C#のコンパイル確認、エディタでの確認や計測、ビルドをす
 - `eval_file` では using が効かず、URPの型も直接参照できない。完全修飾名とリフレクションで触る
 - `capture_game_view` の `save_path` はAssets基準。撮影後に `AssetDatabase.DeleteAsset` で消す
 - `capture_game_view` は1920x1080の画面でも1280x720に縮めて保存する。画素差を測るときは、Play中に `ScreenCapture.CaptureScreenshot`（絶対パス可）で原寸を撮る。ときどき保存されないので、ファイルができたか確かめて撮り直す
+- 計測データは山手線内データ（707図郭、4,283,302,643点。作り方は `docs/hundred-million-point-reproduction.md`）。`Tools/Run-Benchmark.ps1 -OpcPath <OPCの絶対パス>` で渡す。データを移した直後の1回目はStreamingが間に合わず描く点が減ることがあるので、捨てる回にする
 - ビルド計測は `Tools/Run-Benchmark.ps1`。途中の画面を撮って点群が写っていることを確かめる。計測は起動から約12秒で終わるので、走っている間に撮る。窓が裏にあると画面全体の撮影には写らないので、`PrintWindow`（フラグ3）で窓の中身を撮る
 - 自作シェーダのタグは `"RenderPipeline"="UniversalPipeline"` にする。違う値（例: `UniversalRenderPipeline`）だと、エディタでは描けるのに、ビルドでURPがそのシェーダの中身を全部捨てて何も描かれない。ビルドログの `After scriptable stripping: 0` が目印
 - エディタでビルドすると、URPアセットやProjectSettingsが書き換わることがある。コミット前に差分を確認する

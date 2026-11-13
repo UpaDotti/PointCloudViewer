@@ -1,6 +1,6 @@
 # PointCloudViewer
 
-PointCloudViewerは、LAS由来の大量点群（数百万〜1億点規模）をUnityで表示するための検証用Viewerです。
+PointCloudViewerは、LAS由来の数十億点規模の点群（計測データは約43億点）を、LODとStreamingで1フレーム数百万点に絞ってUnityで表示するための検証用Viewerです。
 Octreeの画面占有面積でLODを選び、見える範囲の点だけを段階的にGPUへ常駐させて、Indirect Drawで描画します。
 内蔵GPUで詰まっている頂点処理を減らす方式を比べた結果、Split（点キャッシュ）をメインに採用し、Directを基準として残しています（詰まっている根拠は[フレーム時間の原因分析](docs/profiler-frame-analysis.md)、採用の理由は[集め直し方式](docs/gather-prototype.md#採用の判断)）。
 
@@ -15,23 +15,19 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 ## 最新の計測
 
-### ビルド
+### 計測データ
 
-2026-11-02、Windowsプレイヤー（通常ビルド、D3D11、Intel UHD）、`Tools/Run-Benchmark.ps1`（`CameraOrbitMover` + `BenchmarkSession (capture=60fps)`、570フレーム、1920x1080の窓）、`Assets/sample.opc`、コミット 35d5c52。当時あった4モードを順に4回測った平均フレーム時間の範囲です。計測中の画面で4モードとも点群が写っていることを確認しています。ここには今あるモードだけを載せます。削除済みモードの値は[集め直し方式](docs/gather-prototype.md)にあります。
+東京都区部点群データのうち、山手線の内側とその周囲1図郭分（1/500図郭707枚、4,283,302,643点、OPC 41.4GB）です。公開データから同じものを作れます（一覧・スクリプト・手順は[点群データの出所と作り方](docs/hundred-million-point-reproduction.md#山手線内データ2026-11rtx-5070の計測)）。
 
-| モード | 平均フレーム時間 | Directとの比 | 詳細 |
-| --- | ---: | ---: | --- |
-| Direct | 24.2〜24.3 ms | 1.00 | [仕組み](docs/point-cloud-processing-flow.md) |
-| Split（点キャッシュ、count 4） | 20.6〜20.8 ms | 0.86 | [分割描画検証](docs/split-render-validation.md#処理時間) |
+計測条件: Windowsプレイヤー（通常ビルド、D3D11）、`Tools/Run-Benchmark.ps1 -OpcPath <このOPC>`（`CameraOrbitMover` + `BenchmarkSession (capture=60fps)`、570フレーム、1920x1080の窓）。カメラはデータの中心（市ヶ谷付近）の上空を回ります。DirectとSplitを交互に4回測った平均フレーム時間の範囲です。毎回、計測中の画面で点群が写っていることを確認しています。
 
-### エディタ
+| GPU | 計測日 | Direct | Split（点キャッシュ、count 4） | SplitとDirectの比 |
+| --- | --- | ---: | ---: | ---: |
+| NVIDIA GeForce RTX 5070（VRAM 12GB） | 2026-11-14 | 2.87〜3.09 ms | 1.72〜1.77 ms | 0.58 |
+| Intel UHD | 未計測 | – | – | – |
 
-すべてUnityエディタ上、`CameraOrbitMover` + `BenchmarkSession (capture=60fps)`、570フレーム、1920x1080での値です。
-回ごとにDirectの値も揺れるため、同じ回のDirectと比べます。
-
-| 計測日 | モード | 平均フレーム時間 | 同じ回のDirect | 詳細 |
-| --- | --- | ---: | ---: | --- |
-| 2026-10-24 | Split（点キャッシュ、count 4） | 23.0 / 22.9 ms | 25.8 / 25.7 ms | [分割描画検証](docs/split-render-validation.md#処理時間) |
+- RTX 5070: ドライバ 32.0.16.1088、リモートデスクトップ接続中に計測。コードはコミット 7d5d340 の時点（以降は文書だけの変更）。1フレームに描いた点は平均約456万点です。1回ごとの値は[分割描画検証](docs/split-render-validation.md#処理時間)にあります。
+- 2026-11-13以前の値は別のデータ（23区、作り直せない）での計測です。比べられないので、ここには載せません（[分割描画検証](docs/split-render-validation.md#処理時間)に残しています）。
 
 ## 文書
 
@@ -63,7 +59,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 ## 現在の制限
 
-- 計測は1データ・1カメラ経路・1台のGPU（Intel UHD）だけです。
+- 計測は1データ・1カメラ経路・1台のGPU（RTX 5070）だけです。
 - 2026-11-01より前のビルドの計測値は無効です（シェーダのタグ違いで点群が描かれていませんでした）。
 
 ## ライセンス
