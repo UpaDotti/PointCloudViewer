@@ -41,7 +41,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 | 仕組み（処理の流れ・クラス・データの形・設計判断） | [点群の変換から描画まで](docs/point-cloud-processing-flow.md) |
 | 分割描画の実装・計測・URP / Render Graphの制約 | [分割描画検証](docs/split-render-validation.md) |
 | 集め直し方式の計測と不採用の理由（コードは削除済み） | [集め直し方式](docs/gather-prototype.md) |
-| 1億点超データの出所と再現条件 | [1億点超データの出所](docs/hundred-million-point-reproduction.md) |
+| 点群データの出所・ライセンス・作り方 | [点群データの出所と作り方](docs/hundred-million-point-reproduction.md) |
 | 何が重いか（フレーム時間の内訳、頂点処理で詰まっている根拠） | [フレーム時間の原因分析](docs/profiler-frame-analysis.md) |
 | AIへの作業指示 | [CLAUDE.md](CLAUDE.md) |
 
@@ -49,7 +49,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 点群データはリポジトリに含まれていません。LASから自分でOPCを作ります。
 
-1. LASを用意します。計測に使ったのは[東京都の区部点群データ](https://www.geospatial.jp/ckan/dataset/tokyopc-23ku-2024)（CC BY 4.0）です。全体はとても大きいので、まずは数図郭分で試すのがおすすめです。
+1. LASを用意します。計測に使ったのは[東京都の区部点群データ](https://www.geospatial.jp/ckan/dataset/tokyopc-23ku-2024)（CC BY 4.0）です。全体はとても大きいので、まずは数図郭分で試すのがおすすめです。RTX 5070の計測に使った山手線内の707図郭は、一覧 `docs/data/tokyo-yamanote-sheets.csv` と `Tools/TokyoPointCloud/` のスクリプトで同じものを用意できます（手順は[点群データの出所と作り方](docs/hundred-million-point-reproduction.md#山手線内データ2026-11rtx-5070の計測)）。
 2. [PointCloudConverter](https://github.com/UpaDotti/PointCloudConverter) で、LASのフォルダを1つのOPCに変換します。出力は `sample.opc` です（手順はConverterのREADME）。
 3. `sample.opc` を `Assets/` の直下に置きます。`*.opc` は `.gitignore` に入っているのでコミットされません。
 
@@ -68,5 +68,6 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 ## ライセンス
 
-- このリポジトリのコードと文書は [MIT License](LICENSE) です。
-- 点群データは含みません。計測に使った東京都の点群データは CC BY 4.0 で、使うときは公開元の表示に従ってください（[1億点超データの出所](docs/hundred-million-point-reproduction.md)）。
+- このリポジトリのコードと文書は [MIT License](LICENSE) です。ただし `docs/data/` の図郭一覧は除きます（下記）。
+- 点群データは含みません。計測に使ったのは「[東京都デジタルツイン実現プロジェクト 区部点群データ](https://www.geospatial.jp/ckan/dataset/tokyopc-23ku-2024)」（作成者: 東京都デジタルサービス局、[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/deed.ja)）で、OPCへ変換して使っています。
+- `docs/data/tokyo-yamanote-sheets.csv` は、このデータの索引から図郭番号とURLを取り出したもので、CC BY 4.0 に従います。点群を描いた画面や動画も同じです。詳細は[点群データの出所と作り方](docs/hundred-million-point-reproduction.md#元データとライセンス)。
