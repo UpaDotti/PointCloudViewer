@@ -9,7 +9,7 @@ using UnityEngine;
 public static class BenchmarkPlayerBuilder
 {
     // 計測に使うシーン（OpcLoaderと非アクティブなBenchmarkを含む）
-    private const string ScenePath = "Assets/Scenes/TcpViewer.unity";
+    private const string ScenePath = "Assets/Scenes/PointCloudViewer.unity";
     // 出力先（Builds/ はgitignore済み）
     private const string OutputPath = "Builds/Benchmark/PointCloudViewer.exe";
 

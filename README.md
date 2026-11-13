@@ -54,7 +54,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 ## 動かし方
 
 - Unity 6000.3.9f1、URP 17.3.0（Render Graph有効）。
-- `Assets/Scenes/TcpViewer.unity` を開いてPlayします。点群ファイルは `OpcLoader` の File Path（既定は `Assets/sample.opc`）です。ファイルが無いときはConsoleにエラーが出て、何も描かれません。
+- `Assets/Scenes/PointCloudViewer.unity` を開いてPlayします。点群ファイルは `OpcLoader` の File Path（既定は `Assets/sample.opc`）です。ファイルが無いときはConsoleにエラーが出て、何も描かれません。
 - エディタで計測するときは、シーンの `Benchmark` オブジェクトを有効にしてPlayします。終わるとConsoleに `=== BenchmarkSession` から始まる結果が出ます。
 
 ## 現在の制限
