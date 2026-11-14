@@ -4,6 +4,12 @@ PointCloudViewerは、LAS由来の数十億点規模の点群（計測データ�
 Octreeの画面占有面積でLODを選び、見える範囲の点だけを段階的にGPUへ常駐させて、Indirect Drawで描画します。
 内蔵GPUで詰まっている頂点処理を減らす方式を比べた結果、Split（点キャッシュ）をメインに採用し、Directを基準として残しています（詰まっている根拠は[フレーム時間の原因分析](docs/profiler-frame-analysis.md)、採用の理由は[集め直し方式](docs/gather-prototype.md#採用の判断)）。
 
+## デモ動画
+
+[![山手線内の点群を上空から東京タワーへ降りて見るデモ動画](https://img.youtube.com/vi/2Nvn5spxYM0/maxresdefault.jpg)](https://youtu.be/2Nvn5spxYM0)
+
+山手線内データ（約43億点）を、上空から麻布台・東京タワー付近へ降りて見る45秒の動画です（YouTube、限定公開）。動画は元データの加工物なのでCC BY 4.0に従います（出典は動画の最後と[ライセンス](#ライセンス)）。
+
 ## 描画モード
 
 `OpcLoader` の Render Mode で切り替えます。
