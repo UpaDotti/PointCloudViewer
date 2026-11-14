@@ -14,9 +14,8 @@
 
 上ほど先にやる。
 
-1. **Intel UHDで山手線内データを計測する**: READMEの表のIntel UHDが未計測。RTX 5070と同じ条件（`Tools/Run-Benchmark.ps1 -OpcPath`、DirectとSplitを交互に5回、1回目は捨てる、毎回画面で点群を確認）で測る
-2. **Splitの並び順の係数を7か17に変えるか試す**: 実測では今の黄金比より0.3〜0.8ms速い（[分割描画検証](split-render-validation.md#並び順の係数)）
-3. **点キャッシュ方式のSplitで測り直す**
+1. **Splitの並び順の係数を7か17に変えるか試す**: 実測では今の黄金比より0.3〜0.8ms速い（[分割描画検証](split-render-validation.md#並び順の係数)）
+2. **点キャッシュ方式のSplitで測り直す**
    - SplitCount比較（旧方式の値しかない）。`SplitCount = 8` も測る
    - 解像度変更後のスクリーンショット
 
