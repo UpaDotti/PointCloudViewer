@@ -17,17 +17,17 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 ### 計測データ
 
-東京都区部点群データのうち、山手線の内側とその周囲1図郭分（1/500図郭707枚、4,283,302,643点、OPC 41.4GB）です。公開データから同じものを作れます（一覧・スクリプト・手順は[点群データの出所と作り方](docs/hundred-million-point-reproduction.md#山手線内データ2026-11rtx-5070の計測)）。
+東京都区部点群データのうち、山手線の内側とその周囲1図郭分（1/500図郭707枚、4,283,302,643点、OPC 41.4GB）です。公開データから同じものを作れます（一覧・スクリプト・手順は[点群データの出所と作り方](docs/hundred-million-point-reproduction.md#山手線内データ2026-11)）。
 
 計測条件: Windowsプレイヤー（通常ビルド、D3D11）、`Tools/Run-Benchmark.ps1 -OpcPath <このOPC>`（`CameraOrbitMover` + `BenchmarkSession (capture=60fps)`、570フレーム、1920x1080の窓）。カメラはデータの中心（市ヶ谷付近）の上空を回ります。DirectとSplitを交互に4回測った平均フレーム時間の範囲です。毎回、計測中の画面で点群が写っていることを確認しています。
 
 | GPU | 計測日 | Direct | Split（点キャッシュ、count 4） | SplitとDirectの比 |
 | --- | --- | ---: | ---: | ---: |
-| NVIDIA GeForce RTX 5070（VRAM 12GB） | 2026-11-14 | 2.87〜3.09 ms | 1.72〜1.77 ms | 0.58 |
 | Intel UHD Graphics（内蔵GPU、Core i5-12450H） | 2026-11-14 | 25.45〜25.49 ms | 19.29〜19.41 ms | 0.76 |
+| NVIDIA GeForce RTX 5070（VRAM 12GB） | 2026-11-14 | 2.87〜3.09 ms | 1.72〜1.77 ms | 0.58 |
 
-- RTX 5070: ドライバ 32.0.16.1088、リモートデスクトップ接続中に計測。コードはコミット 7d5d340 の時点（以降は文書だけの変更）。1フレームに描いた点は平均約456万点です。1回ごとの値は[分割描画検証](docs/split-render-validation.md#処理時間)にあります。
 - Intel UHD: ドライバ 32.0.101.7076。コードはコミット 059fd7d の時点。1フレームに描いた点は平均約458万点です。1回ごとの値は[分割描画検証](docs/split-render-validation.md#処理時間)にあります。
+- RTX 5070: ドライバ 32.0.16.1088、リモートデスクトップ接続中に計測。コードはコミット 7d5d340 の時点（以降は文書だけの変更）。1フレームに描いた点は平均約456万点です。1回ごとの値は[分割描画検証](docs/split-render-validation.md#処理時間)にあります。
 - 2026-11-13以前の値は別のデータ（23区、作り直せない）での計測です。比べられないので、ここには載せません（[分割描画検証](docs/split-render-validation.md#処理時間)に残しています）。
 
 ## 文書
@@ -46,7 +46,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 点群データはリポジトリに含まれていません。LASから自分でOPCを作ります。
 
-1. LASを用意します。計測に使ったのは[東京都の区部点群データ](https://www.geospatial.jp/ckan/dataset/tokyopc-23ku-2024)（CC BY 4.0）です。全体はとても大きいので、まずは数図郭分で試すのがおすすめです。RTX 5070の計測に使った山手線内の707図郭は、一覧 `docs/data/tokyo-yamanote-sheets.csv` と `Tools/TokyoPointCloud/` のスクリプトで同じものを用意できます（手順は[点群データの出所と作り方](docs/hundred-million-point-reproduction.md#山手線内データ2026-11rtx-5070の計測)）。
+1. LASを用意します。計測に使ったのは[東京都の区部点群データ](https://www.geospatial.jp/ckan/dataset/tokyopc-23ku-2024)（CC BY 4.0）です。全体はとても大きいので、まずは数図郭分で試すのがおすすめです。計測に使った山手線内の707図郭は、一覧 `docs/data/tokyo-yamanote-sheets.csv` と `Tools/TokyoPointCloud/` のスクリプトで同じものを用意できます（手順は[点群データの出所と作り方](docs/hundred-million-point-reproduction.md#山手線内データ2026-11)）。
 2. [PointCloudConverter](https://github.com/UpaDotti/PointCloudConverter) で、LASのフォルダを1つのOPCに変換します。出力は `sample.opc` です（手順はConverterのREADME）。
 3. `sample.opc` を `Assets/` の直下に置きます。`*.opc` は `.gitignore` に入っているのでコミットされません。
 
@@ -60,7 +60,7 @@ Octreeの画面占有面積でLODを選び、見える範囲の点だけを段�
 
 ## 現在の制限
 
-- 計測は1データ・1カメラ経路・2台のGPU（RTX 5070、Intel UHD）だけです。
+- 計測は1データ・1カメラ経路・2台のGPU（Intel UHD、RTX 5070）だけです。
 - 2026-11-01より前のビルドの計測値は無効です（シェーダのタグ違いで点群が描かれていませんでした）。
 
 ## ライセンス
